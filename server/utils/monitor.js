@@ -20,12 +20,7 @@ const addMonitor = (projectId, pid) => {
  * @param {string} projectId 
  */
 const removeMonitor = (projectId) => {
-  const pid = targets.get(projectId);
-  if (pid) {
-    // 停止 pidusage 内部的监控，释放资源
-    pidusage.unmonitor(pid); 
-    targets.delete(projectId);
-  }
+  targets.delete(projectId);
 };
 
 /**

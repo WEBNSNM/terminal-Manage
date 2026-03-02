@@ -14,6 +14,8 @@ const hiddenProjectNames = ref(new Set())
 const showHidden = ref(false)
 const isScanning = ref(false)
 const stats = ref({}) // 存放实时监控数据
+const installedNodeVersions = ref([]) // nvm 已安装的 Node 版本列表
+const nvmDetected = ref(false) // 是否检测到 nvm
 
 // --- 初始化 ---
 onMounted(() => {
@@ -28,7 +30,14 @@ onMounted(() => {
   if (savedHidden) {
     hiddenProjectNames.value = new Set(JSON.parse(savedHidden))
   }
-  
+
+  // 加载已安装的 Node 版本列表
+  socket.emit('node:get-versions', (data) => {
+    nvmDetected.value = data.nvmDetected
+    installedNodeVersions.value = data.versions || []
+    console.log(`📦 NVM ${data.nvmDetected ? '已检测到' : '未检测到'}, 已安装版本: ${data.versions.length}`)
+  })
+
   // 建立连接日志
   socket.on('connect', () => console.log('✅ Socket已连接'))
 })
@@ -136,7 +145,44 @@ const handleRun = (p, script) => {
     projectName: p.name,
     script,
     projectPath: p.path,
-    runner: p.runner
+    runner: p.runner,
+    nodeVersion: p.effectiveNodeVersion || null
+  })
+}
+
+const handleNodeVersionChange = (p, version) => {
+  // 保存手动覆盖到配置文件
+  socket.emit('config:load', 'node_version_overrides', (overrides) => {
+    const newOverrides = { ...(overrides || {}) }
+    if (version === 'auto') {
+      // 清除手动覆盖，回到自动检测
+      delete newOverrides[p.path]
+    } else if (version === 'system') {
+      // 显式指定使用系统默认
+      newOverrides[p.path] = 'system'
+    } else {
+      // 手动指定具体版本
+      newOverrides[p.path] = version
+    }
+    socket.emit('config:save', { key: 'node_version_overrides', value: newOverrides })
+
+    // 更新本地项目数据
+    const project = rawProjects.value.find(x => x.path === p.path)
+    if (project) {
+      if (version === 'auto') {
+        project.nodeVersionOverride = null
+        project.effectiveNodeVersion = project.resolvedNodeVersion?.version || null
+        project.nodeVersionSource = project.resolvedNodeVersion ? 'auto' : 'system'
+      } else if (version === 'system') {
+        project.nodeVersionOverride = null
+        project.effectiveNodeVersion = null
+        project.nodeVersionSource = 'system'
+      } else {
+        project.nodeVersionOverride = version
+        project.effectiveNodeVersion = version
+        project.nodeVersionSource = 'manual'
+      }
+    }
   })
 }
 
@@ -210,16 +256,19 @@ const toggleHide = (p) => {
         <p class="text-blue-400 animate-pulse">正在深度扫描...</p>
       </div>
 
-      <ProjectList 
+      <ProjectList
         :projects="visibleProjects"
         :stats="stats"
         :logs="projectLogs"
         :hidden-set="hiddenProjectNames"
+        :installed-node-versions="installedNodeVersions"
+        :nvm-detected="nvmDetected"
         @run="handleRun"
         @stop="handleStop"
         @open-folder="(path) => socket.emit('open-project-folder', path)"
         @open-file="(uri) => socket.emit('open-file', uri)"
         @toggle-hide="toggleHide"
+        @node-version-change="handleNodeVersionChange"
       />
       <AiSettings 
         :visible="showSettings" 

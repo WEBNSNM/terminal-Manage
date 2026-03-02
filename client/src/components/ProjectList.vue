@@ -28,6 +28,13 @@
                 <span :class="['text-[10px] px-1.5 py-0.5 rounded border font-mono uppercase', getRunnerBadgeStyle(p.runner)]">
                   {{ p.runner }}
                 </span>
+                <span
+                  v-if="nvmDetected"
+                  :class="['text-[10px] px-1.5 py-0.5 rounded border font-mono', getNodeVersionBadgeStyle(p.nodeVersionSource)]"
+                  :title="getNodeVersionTooltip(p)"
+                >
+                  {{ getNodeVersionLabel(p) }}
+                </span>
               </div>
               
               <div class="flex items-center min-w-0 gap-1 text-gray-500">
@@ -81,6 +88,22 @@
           </button>
 
           <div class="flex-1"></div>
+
+          <select
+            v-if="nvmDetected && installedNodeVersions.length > 0"
+            :value="p.nodeVersionOverride || (p.nodeVersionSource === 'auto' ? 'auto' : 'system')"
+            @change="emit('node-version-change', p, $event.target.value)"
+            class="px-2 py-1 text-[10px] font-mono bg-gray-800 border border-gray-600 rounded text-gray-300 focus:outline-none focus:border-blue-500 cursor-pointer max-w-[120px]"
+            title="选择 Node 版本"
+          >
+            <option value="auto">
+              {{ p.detectedNodeVersion ? `自动 (${p.detectedNodeVersion.raw})` : '自动检测' }}
+            </option>
+            <option value="system">系统默认</option>
+            <option v-for="v in installedNodeVersions" :key="v" :value="v">
+              v{{ v }}
+            </option>
+          </select>
 
           <button
             @click="handleAiCommit(p)"
@@ -184,10 +207,12 @@ const props = defineProps({
   projects: { type: Array, default: () => [] },
   stats: { type: Object, default: () => ({}) }, // 监控数据
   logs: { type: Object, default: () => ({}) },  // 日志数据
-  hiddenSet: { type: Set, default: () => new Set() }
+  hiddenSet: { type: Set, default: () => new Set() },
+  installedNodeVersions: { type: Array, default: () => [] },
+  nvmDetected: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['run', 'stop', 'open-folder', 'open-file', 'toggle-hide'])
+const emit = defineEmits(['run', 'stop', 'open-folder', 'open-file', 'toggle-hide', 'node-version-change'])
 
 // Git 状态
 const showGitModal = ref(false);
@@ -292,5 +317,31 @@ const formatBytes = (bytes) => {
 const calcMemPercent = (bytes) => {
   const limit = 500 * 1024 * 1024 // 500MB 基准
   return Math.min((bytes / limit) * 100, 100)
+}
+
+// Node 版本标签样式
+const getNodeVersionBadgeStyle = (source) => {
+  switch (source) {
+    case 'auto': return 'bg-green-500/20 text-green-400 border-green-500/50'
+    case 'manual': return 'bg-purple-500/20 text-purple-400 border-purple-500/50'
+    default: return 'bg-gray-500/20 text-gray-400 border-gray-500/50'
+  }
+}
+
+const getNodeVersionLabel = (p) => {
+  if (p.effectiveNodeVersion) {
+    return `v${p.effectiveNodeVersion}`
+  }
+  return 'system'
+}
+
+const getNodeVersionTooltip = (p) => {
+  if (p.nodeVersionSource === 'manual') {
+    return `手动指定: v${p.effectiveNodeVersion}`
+  }
+  if (p.nodeVersionSource === 'auto' && p.detectedNodeVersion) {
+    return `自动检测: ${p.detectedNodeVersion.raw} (来源: ${p.detectedNodeVersion.source})`
+  }
+  return '使用系统默认 Node 版本'
 }
 </script>

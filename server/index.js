@@ -8,7 +8,8 @@ const os = require('os');
 const { spawn, exec } = require('child_process');
 // ⚠️ 注意：这里假设你的 monitor.js 在 utils 目录下
 // 如果你的 monitor.js 在 server 根目录，请改为 require('./monitor')
-const monitor = require('./utils/monitor'); 
+const monitor = require('./utils/monitor');
+const nodeVersions = require('./utils/nodeVersions');
 
 // 配置文件存在用户目录下，防止误删
 const CONFIG_PATH = path.join(os.homedir(), '.devmaster-config.json');
@@ -86,11 +87,17 @@ if (['node_modules', '.git', 'dist', 'build', '.idea', '.vscode', 'public', 'uni
       if (fs.existsSync(path.join(currentPath, 'pnpm-lock.yaml'))) runner = 'pnpm';
       else if (fs.existsSync(path.join(currentPath, 'yarn.lock'))) runner = 'yarn';
       
+      // 检测项目所需的 Node 版本
+      const detected = nodeVersions.detectProjectNodeVersion(currentPath);
+      const resolved = detected ? nodeVersions.resolveNodeVersion(detected.raw) : null;
+
       return [{
         name: folderName,
         path: currentPath,
-        runner: runner, 
-        scripts: pkg.scripts || {}
+        runner: runner,
+        scripts: pkg.scripts || {},
+        detectedNodeVersion: detected,   // { raw, source } | null
+        resolvedNodeVersion: resolved     // { version, exact } | null
       }];
     } catch (e) { return []; }
   }
@@ -142,44 +149,122 @@ io.on('connection', (socket) => {
         if (selectedPath) {
             socket.emit('folder-selected', selectedPath);
             const projects = scanProjects(selectedPath);
-            socket.emit('projects-loaded', projects);
+            socket.emit('projects-loaded', enrichProjects(projects));
         }
     });
   });
+
+  // 辅助函数：为项目列表补充运行状态和 Node 版本覆盖信息
+  const enrichProjects = (projects) => {
+    const config = readConfigFile();
+    const overrides = config.node_version_overrides || {};
+
+    return projects.map(p => {
+      // 同步运行状态
+      const runningScripts = {};
+      for (const [taskKey] of processes) {
+        if (taskKey.startsWith(`${p.name}:`)) {
+          runningScripts[taskKey.split(':')[1]] = true;
+        }
+      }
+
+      // 合并 Node 版本覆盖
+      const override = overrides[p.path] || null;
+      let effectiveNodeVersion = null;
+      let nodeVersionSource = 'system';
+
+      if (override && override !== 'system') {
+        // 手动指定了具体版本
+        effectiveNodeVersion = override;
+        nodeVersionSource = 'manual';
+      } else if (override === 'system') {
+        // 显式选择系统默认，忽略自动检测
+        effectiveNodeVersion = null;
+        nodeVersionSource = 'system';
+      } else if (p.resolvedNodeVersion) {
+        // 无覆盖，使用自动检测
+        effectiveNodeVersion = p.resolvedNodeVersion.version;
+        nodeVersionSource = 'auto';
+      }
+
+      return {
+        ...p,
+        runningScripts,
+        nodeVersionOverride: (override && override !== 'system') ? override : null,
+        effectiveNodeVersion,
+        nodeVersionSource
+      };
+    });
+  };
 
   // 1. 扫描目录
   socket.on('scan-dir', (dirPath) => {
     const projects = scanProjects(dirPath);
-    // 同步运行状态
-    const enrichedProjects = projects.map(p => {
-        const runningScripts = {};
-        for (const [taskKey] of processes) {
-            if (taskKey.startsWith(`${p.name}:`)) {
-                runningScripts[taskKey.split(':')[1]] = true;
-            }
-        }
-        return { ...p, runningScripts };
-    });
-    socket.emit('projects-loaded', enrichedProjects);
+    socket.emit('projects-loaded', enrichProjects(projects));
   });
 
-  // 2. 启动任务 (核心修改：加入监控)
-  socket.on('start-task', ({ projectName, script, projectPath, runner }) => {
+  // 2. 启动任务 (核心修改：加入监控 + Node 版本切换)
+  socket.on('start-task', ({ projectName, script, projectPath, runner, nodeVersion }) => {
     const taskKey = `${projectName}:${script}`;
     if (processes.has(taskKey)) return;
 
     const currentRunner = runner || 'npm';
-    console.log(`🚀 启动任务: ${taskKey}`);
-    
-    let cmd = currentRunner;
-    if (process.platform === 'win32') cmd = `${currentRunner}.cmd`;
 
-    const child = spawn(cmd, ['run', script], {
+    // 确定使用的 Node 版本：手动指定 > 自动检测 > 系统默认
+    let targetNodeVersion = null;
+    if (nodeVersion && nodeVersion !== 'system') {
+      targetNodeVersion = nodeVersion;
+    } else if (!nodeVersion) {
+      // 未指定时尝试自动检测
+      const detected = nodeVersions.detectProjectNodeVersion(projectPath);
+      if (detected) {
+        const resolved = nodeVersions.resolveNodeVersion(detected.raw);
+        if (resolved) targetNodeVersion = resolved.version;
+      }
+    }
+
+    const env = targetNodeVersion
+      ? nodeVersions.buildEnvWithNodeVersion(targetNodeVersion)
+      : { ...process.env, FORCE_COLOR: '1' };
+
+    // 解析 runner 命令：切换版本时统一用目标版本的 node 直接执行 cli.js
+    // 原因：所有包装脚本（npm.cmd / npm shell script）内部都会通过 PATH 或全局前缀
+    //       查找 node，可能解析到 NVM 符号链接指向的其他版本，导致版本不匹配
+    let cmd;
+    let spawnArgs = ['run', script];
+
+    if (targetNodeVersion) {
+      const versionDir = nodeVersions.getVersionDir(targetNodeVersion);
+      if (versionDir) {
+        const nodeExe = nodeVersions.getNodeBin(versionDir);
+        const cliJs = nodeVersions.getRunnerCliJs(versionDir, currentRunner);
+
+        if (cliJs) {
+          // 直接 node + cli.js，完全绕过包装脚本
+          cmd = nodeExe;
+          spawnArgs = [cliJs, 'run', script];
+        } else {
+          // cli.js 不存在（如 pnpm 全局安装在其他位置），回退到包装脚本 + 修改后的 PATH
+          cmd = process.platform === 'win32' ? `${currentRunner}.cmd` : currentRunner;
+          console.warn(`[Node切换] ${currentRunner} cli.js 未在 ${versionDir} 中找到，回退到 PATH 解析`);
+        }
+      } else {
+        cmd = process.platform === 'win32' ? `${currentRunner}.cmd` : currentRunner;
+      }
+    } else {
+      cmd = currentRunner;
+      if (process.platform === 'win32') cmd = `${currentRunner}.cmd`;
+    }
+
+    console.log(`🚀 启动任务: ${taskKey}${targetNodeVersion ? ` (Node v${targetNodeVersion})` : ' (系统默认)'}`);
+    console.log(`   命令: ${cmd} ${spawnArgs.join(' ')}`);
+
+    const child = spawn(cmd, spawnArgs, {
       cwd: projectPath,
       shell: true,
       detached: process.platform !== 'win32',
-      stdio: 'pipe', 
-      env: { ...process.env, FORCE_COLOR: '1' } 
+      stdio: 'pipe',
+      env
     });
 
     processes.set(taskKey, child);
@@ -359,6 +444,24 @@ io.on('connection', (socket) => {
     allData[key] = value; // 更新对应的 key
     writeConfigFile(allData); // 写入硬盘
     console.log(`💾 保存配置 [${key}] Success`);
+  });
+
+  // --- Node 版本管理事件 ---
+  socket.on('node:get-versions', (callback) => {
+    const nvmHome = nodeVersions.getNvmHome();
+    const versions = nodeVersions.getInstalledVersions();
+    console.log(`📦 [Node] 已安装版本: ${versions.length > 0 ? versions.join(', ') : '未检测到 nvm'}`);
+    callback({
+      nvmDetected: !!nvmHome,
+      nvmHome: nvmHome || '',
+      versions
+    });
+  });
+
+  socket.on('node:detect-version', ({ projectPath }, callback) => {
+    const detected = nodeVersions.detectProjectNodeVersion(projectPath);
+    const resolved = detected ? nodeVersions.resolveNodeVersion(detected.raw) : null;
+    callback({ detected, resolved });
   });
 
   socket.on('proxy:claude', async ({ message, systemPrompt }, callback) => {
