@@ -70,3 +70,8 @@ npm run dev
 ```bash
 npm run dist
 ```
+### 5.打标签
+```
+git tag v1.0.0
+git push origin v1.0.0
+```
