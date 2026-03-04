@@ -587,6 +587,14 @@ const cleanup = () => {
 };
 
 process.on('SIGINT', cleanup);
+
+// 防止未捕获异常导致 server 崩溃重启（--watch 模式下崩溃会丢失所有进程追踪）
+process.on('uncaughtException', (err) => {
+  console.error('⚠️ [uncaughtException] 捕获未处理异常（已阻止崩溃）:', err.message);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('⚠️ [unhandledRejection] 捕获未处理 Promise 拒绝:', reason);
+});
 // 👇 2. 在文件最底部，server.listen 之前，添加“兜底路由”
 // 作用：无论用户访问什么 URL，如果不是 API，都返回 index.html (支持 Vue Router history 模式)
 app.get(/.*/, (req, res) => {

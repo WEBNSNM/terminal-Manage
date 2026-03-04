@@ -5,7 +5,7 @@
   "main": "main.js",
   "author": "kuyep",
   "scripts": {
-    "server": "cd server && node --watch index.js",
+    "server": "cd server && node --watch-path=./index.js --watch-path=./utils index.js",
     "client": "cd client && npm run dev",
     "dev": "concurrently \"npm run server\" \"npm run client\" --names \"SERVER,CLIENT\" -c \"bgBlue.bold,bgGreen.bold\"",
     "start": "electron .",
