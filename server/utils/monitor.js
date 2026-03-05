@@ -1,4 +1,3 @@
-console.log('🔥 monitor.js 模块被加载了');
 const pidusage = require('pidusage');
 const pidtree = require('pidtree');
 
@@ -6,21 +5,14 @@ const pidtree = require('pidtree');
 const targets = new Map();
 let isRunning = false;
 
-/**
- * 添加监控任务
- * @param {string} projectId 项目唯一标识
- * @param {number} pid 进程 PID
- */
 const addMonitor = (projectId, pid) => {
   targets.set(projectId, pid);
 };
 
-/**
- * 移除监控任务
- * @param {string} projectId 
- */
 const removeMonitor = (projectId) => {
   targets.delete(projectId);
+  // 清理 pidusage 对该 PID 的内部缓存，防止残留状态导致后续查询异常
+  try { pidusage.clear(); } catch (_) {}
 };
 
 /**
@@ -28,60 +20,64 @@ const removeMonitor = (projectId) => {
  */
 const getProjectStats = async (rootPid) => {
   try {
-    // 1. 找到所有子孙进程的 PID (例如 npm -> node -> vite)
     const children = await pidtree(rootPid).catch(() => []);
-    // 2. 把父进程自己也加上
     const allPids = [rootPid, ...children];
-
-    // 3. 获取所有进程的统计数据
     const stats = await pidusage(allPids);
 
-    // 4. 累加所有进程的 CPU 和 内存
     let totalCpu = 0;
     let totalMem = 0;
 
-    Object.values(stats).forEach(s => {
-      totalCpu += s.cpu;
-      totalMem += s.memory;
-    });
+    for (const s of Object.values(stats)) {
+      if (s && typeof s.cpu === 'number' && typeof s.memory === 'number') {
+        totalCpu += s.cpu;
+        totalMem += s.memory;
+      }
+    }
 
     return { cpu: totalCpu, memory: totalMem };
   } catch (err) {
-    // 进程可能刚退出，忽略错误
     return null;
   }
 };
 
 /**
- * 启动轮询 (建议在 socket 连接建立后调用)
+ * 启动轮询
  * @param {Object} io Socket.io 实例
  */
 const startLoop = (io) => {
   if (isRunning) return;
   isRunning = true;
   console.log('✅ 监控循环已启动');
+
   setInterval(async () => {
-    // 👇👇👇 加这行调试日志 👇👇👇
     if (targets.size === 0) return;
 
-    const payload = {};
-    
-    // 遍历所有正在运行的项目
-    for (const [id, pid] of targets.entries()) {
-      const data = await getProjectStats(pid);
-      if (data) {
-        payload[id] = {
-          cpu: data.cpu.toFixed(1), // 保留1位小数
-          memory: data.memory       // 原始字节数
-        };
-      }
-    }
+    try {
+      // 快照当前 targets，防止 await 期间 Map 被外部修改导致迭代异常
+      const snapshot = Array.from(targets.entries());
+      const payload = {};
 
-    // 广播给前端
-    if (Object.keys(payload).length > 0) {
-      io.emit('monitor:update', payload);
+      for (const [id, pid] of snapshot) {
+        // 二次确认目标仍存在（可能在 await 间隙被 removeMonitor 了）
+        if (!targets.has(id)) continue;
+
+        const data = await getProjectStats(pid);
+        if (data) {
+          payload[id] = {
+            cpu: data.cpu.toFixed(1),
+            memory: data.memory
+          };
+        }
+      }
+
+      if (Object.keys(payload).length > 0) {
+        io.emit('monitor:update', payload);
+      }
+    } catch (err) {
+      // 兜底：无论发生什么都不能让这个回调崩溃 server
+      console.error('⚠️ [monitor] 轮询异常:', err.message);
     }
-  }, 2000); // 2秒刷新一次，避免消耗过多自身 CPU
+  }, 2000);
 };
 
 module.exports = { addMonitor, removeMonitor, startLoop };
