@@ -269,6 +269,7 @@ const toggleHide = (p) => {
         @run="handleRun"
         @stop="handleStop"
         @open-folder="(path) => socket.emit('open-project-folder', path)"
+        @open-terminal="(path) => socket.emit('open-terminal', path)"
         @open-file="(uri) => socket.emit('open-file', uri)"
         @toggle-hide="toggleHide"
         @node-version-change="handleNodeVersionChange"

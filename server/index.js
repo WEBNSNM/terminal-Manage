@@ -371,27 +371,40 @@ if ($folder) { $folder.Self.Path }
   // --- 打开项目所在的文件夹 (资源管理器) ---
   socket.on('open-project-folder', (projectPath) => {
     console.log('📂 请求打开文件夹:', projectPath);
-    
+    if (!projectPath) return;
+
+    if (process.platform === 'win32') {
+      // 通过 Shell.Application COM 对象打开，窗口能正确获得焦点置顶
+      const escaped = projectPath.replace(/'/g, "''");
+      exec(`powershell -NoProfile -NonInteractive -Command "(New-Object -ComObject Shell.Application).Explore('${escaped}')"`);
+    } else if (process.platform === 'darwin') {
+      exec(`open "${projectPath}"`);
+    } else {
+      exec(`xdg-open "${projectPath}"`);
+    }
+  });
+
+  // --- 在项目路径下打开系统终端 ---
+  socket.on('open-terminal', (projectPath) => {
+    console.log('💻 请求打开终端:', projectPath);
     if (!projectPath) return;
 
     let cmd;
-    // Windows 的 explorer 即使成功打开也会返回非零退出码，用 start 替代
     if (process.platform === 'win32') {
-      cmd = `start "" "${projectPath}"`;
+      cmd = `start cmd /K "cd /d "${projectPath}""`;
     } else if (process.platform === 'darwin') {
-      // Mac: open "/path/to/folder"
-      cmd = `open "${projectPath}"`;
+      cmd = `open -a Terminal "${projectPath}"`;
     } else {
-      // Linux: xdg-open "/path/to/folder"
-      cmd = `xdg-open "${projectPath}"`;
+      cmd = `x-terminal-emulator --working-directory="${projectPath}" || gnome-terminal --working-directory="${projectPath}"`;
     }
 
     exec(cmd, (err) => {
       if (err) {
-        console.error('打开文件夹失败:', err);
+        console.error('打开终端失败:', err);
       }
     });
   });
+
   // 1. 获取 Git 变更 (用于发给 AI)
   socket.on('git:get-diff', ({ projectPath }, callback) => {
     // 获取未暂存和已暂存的所有变更
