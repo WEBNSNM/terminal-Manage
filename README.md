@@ -29,6 +29,7 @@
 
 <div align="center">
 <img src="./client/public/example.png" width="100%" alt="terminalManage 界面预览">
+<img src="./client/public/terminalgif.gif" width="100%" alt="terminalManage 界面预览">
 </div>
 
 ---
