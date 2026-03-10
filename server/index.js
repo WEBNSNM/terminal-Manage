@@ -422,45 +422,44 @@ if ($folder) { $folder.Self.Path }
     });
   });
 
-  // 2. 执行 Git 提交 (自动暂存所有文件)
-  socket.on('git:commit', ({ projectPath, message }, callback) => {
-    console.log(`📝 [Git] 正在提交项目: ${projectPath}`);
-    
-    // 第一步：git add .
-    // 使用 spawn 而不是 exec，避免 Shell 注入风险
-    const addProcess = spawn('git', ['add', '.'], { cwd: projectPath });
+  // 2. 执行 Git 提交（支持自动拉取和推送）
+  socket.on('git:commit', ({ projectPath, message, autoPush }, callback) => {
+    console.log(`📝 [Git] 正在提交项目: ${projectPath}${autoPush ? ' (Pull → Commit → Push)' : ''}`);
 
-    addProcess.on('close', (code) => {
-      if (code !== 0) {
-        return callback({ success: false, error: 'git add 失败' });
-      }
-
-      // 第二步：git commit -m "message"
-      // spawn 会自动处理引号、空格和特殊字符，Mac/Windows 通吃
-      const commitProcess = spawn('git', ['commit', '-m', message], { cwd: projectPath });
-      
-      let errorMsg = '';
-      let outputMsg = '';
-
-      commitProcess.stdout.on('data', (d) => outputMsg += d.toString());
-      commitProcess.stderr.on('data', (d) => errorMsg += d.toString());
-
-      commitProcess.on('close', (commitCode) => {
-        if (commitCode === 0) {
-          console.log('✅ Git 提交成功');
-          callback({ success: true, output: outputMsg });
-        } else {
-          // 常见错误：没有变化需要提交 (Nothing to commit)
-          if (outputMsg.includes('nothing to commit')) {
-             callback({ success: true, output: '没有检测到文件变化' });
-          } else {
-             console.error('❌ Git 提交失败:', errorMsg);
-             // 如果没配置 user.email，错误信息会在这里
-             callback({ success: false, error: errorMsg || '提交失败，请检查 Git 配置' });
-          }
-        }
-      });
+    // 封装 spawn 为 Promise，便于链式调用
+    const runGit = (args) => new Promise((resolve, reject) => {
+      const child = spawn('git', args, { cwd: projectPath });
+      let stdout = '', stderr = '';
+      child.stdout.on('data', d => stdout += d.toString());
+      child.stderr.on('data', d => stderr += d.toString());
+      child.on('close', code => code === 0 ? resolve(stdout) : reject(stderr || stdout));
     });
+
+    (async () => {
+      try {
+        await runGit(['add', '.']);
+        await runGit(['commit', '-m', message]);
+        if (autoPush) {
+          try {
+            await runGit(['pull', '--rebase']);
+          } catch (pullErr) {
+            // rebase 冲突时自动回滚，避免仓库卡在中间状态
+            await runGit(['rebase', '--abort']).catch(() => {});
+            return callback({ success: false, error: `拉取冲突，提交已保留在本地，请手动解决冲突后推送\n${pullErr}` });
+          }
+          await runGit(['push']);
+        }
+        console.log('✅ Git 操作成功');
+        callback({ success: true });
+      } catch (err) {
+        if (err.includes('nothing to commit')) {
+          callback({ success: true, output: '没有检测到文件变化' });
+        } else {
+          console.error('❌ Git 操作失败:', err);
+          callback({ success: false, error: err });
+        }
+      }
+    })();
   });
 
   socket.on('config:load', (key, callback) => {
@@ -496,12 +495,12 @@ if ($folder) { $folder.Self.Path }
     callback({ detected, resolved });
   });
 
-  socket.on('proxy:claude', async ({ message, systemPrompt }, callback) => {
-    // 从配置文件读取当前激活的 AI 配置
+  socket.on('proxy:claude', async ({ message, systemPrompt, configId }, callback) => {
+    // 从配置文件读取 AI 配置，支持场景级指定
     const allConfig = readConfigFile();
     const configList = allConfig['ai_config_list'] || [];
-    const activeId = allConfig['ai_active_id'] || '';
-    const aiConfig = configList.find(c => c.id === activeId) || configList[0];
+    const targetId = configId || allConfig['ai_active_id'] || '';
+    const aiConfig = configList.find(c => c.id === targetId) || configList[0];
 
     if (!aiConfig || !aiConfig.baseURL || !aiConfig.apiKey) {
       return callback({ success: false, error: '请先在设置中配置 AI 模型的 Base URL 和 API Key' });
@@ -626,7 +625,7 @@ app.get(/.*/, (req, res) => {
     }
 });
 if (require.main === module) {
-    server.listen(3000, () => console.log('✅ Server running on 3000'));
+    server.listen(2117, () => console.log('✅ Server running on 2117'));
 }
 
 module.exports = server;

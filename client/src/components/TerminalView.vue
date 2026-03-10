@@ -10,7 +10,10 @@ import hljs from 'highlight.js';
 import 'highlight.js/styles/atom-one-dark.css'; // 代码高亮样式
 import { useAiConfig } from '../utils/useAiConfig';
 
-const { activeConfig } = useAiConfig();
+const { activeConfig, getSceneConfig } = useAiConfig();
+
+// 诊断场景使用的模型配置
+const diagModelConfig = computed(() => getSceneConfig('diagnosis'));
 
 const props = defineProps({
   id: String,
@@ -189,7 +192,8 @@ ${projectInfo}
       userMessage = recentLogs;
     }
 
-    const result = await callKuyepClaude(userMessage, systemPrompt);
+    const diagConfig = getSceneConfig('diagnosis');
+    const result = await callKuyepClaude(userMessage, systemPrompt, diagConfig?.id);
     aiResult.value = result;
     userQuestion.value = '';
   } catch (error) {
@@ -362,9 +366,9 @@ onBeforeUnmount(() => { term?.dispose(); resizeObserver.disconnect(); });
 
       <div class="flex items-center justify-end gap-2 px-4 py-2 text-xs text-gray-500 border-t border-gray-700/50">
         <span>由</span>
-        <span class="text-purple-400">{{ activeConfig.name || 'AI' }}</span>
+        <span class="text-purple-400">{{ diagModelConfig.name || 'AI' }}</span>
         <span>·</span>
-        <span class="font-mono text-gray-400">{{ activeConfig.model }}</span>
+        <span class="font-mono text-gray-400">{{ diagModelConfig.model }}</span>
         <span>提供</span>
       </div>
     </div>

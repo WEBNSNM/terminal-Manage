@@ -4,6 +4,7 @@ import { socket } from './socket'; // 👈 引入刚才创建的 socket 单例
 // 定义存储在 JSON 文件里的 Key 名称
 const STORAGE_KEY_LIST = 'ai_config_list';
 const STORAGE_KEY_ACTIVE = 'ai_active_id';
+const STORAGE_KEY_SCENES = 'ai_scene_configs';
 
 const DEFAULT_CONFIG: any = {
   id: 'default',
@@ -17,6 +18,7 @@ const DEFAULT_CONFIG: any = {
 // 响应式状态
 const configList = ref([DEFAULT_CONFIG]);
 const activeId = ref('default');
+const sceneConfigs = ref<Record<string, string>>({ git: '', diagnosis: '' });
 const isLoaded = ref(false); // 标记是否加载完成
 
 // 🔄 初始化：从后端加载数据
@@ -36,6 +38,13 @@ const init = () => {
   socket.emit('config:load', STORAGE_KEY_ACTIVE, (id: any) => {
     if (id) activeId.value = id;
   });
+
+  // 3. 加载场景配置
+  socket.emit('config:load', STORAGE_KEY_SCENES, (data: any) => {
+    if (data && typeof data === 'object') {
+      sceneConfigs.value = { git: '', diagnosis: '', ...data };
+    }
+  });
 };
 
 // 立即启动加载
@@ -54,6 +63,12 @@ watch(activeId, (newVal) => {
     socket.emit('config:save', { key: STORAGE_KEY_ACTIVE, value: newVal });
   }
 });
+
+watch(sceneConfigs, (newVal) => {
+  if (isLoaded.value) {
+    socket.emit('config:save', { key: STORAGE_KEY_SCENES, value: newVal });
+  }
+}, { deep: true });
 
 export function useAiConfig() {
   const activeConfig = computed(() => {
@@ -80,10 +95,21 @@ export function useAiConfig() {
     }
   };
 
+  // 根据场景获取对应的配置对象（无场景配置时回退到全局）
+  const getSceneConfig = (scene: string) => {
+    const sceneId = sceneConfigs.value[scene];
+    if (sceneId) {
+      return configList.value.find(c => c.id === sceneId) || activeConfig.value;
+    }
+    return activeConfig.value;
+  };
+
   return {
     configList,
     activeId,
     activeConfig,
+    sceneConfigs,
+    getSceneConfig,
     addConfig,
     removeConfig,
     updateConfig

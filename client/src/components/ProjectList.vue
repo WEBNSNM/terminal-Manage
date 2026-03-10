@@ -178,22 +178,28 @@
           
           <div class="flex items-center gap-2 mb-3 text-xs text-gray-500">
             <span>由</span>
-            <span class="text-purple-400">{{ activeConfig.name || 'AI' }}</span>
+            <span class="text-purple-400">{{ gitModelConfig.name || 'AI' }}</span>
             <span>·</span>
-            <span class="font-mono text-gray-400">{{ activeConfig.model }}</span>
+            <span class="font-mono text-gray-400">{{ gitModelConfig.model }}</span>
             <span>提供</span>
           </div>
 
-          <div class="flex justify-end gap-3">
+          <div class="flex items-center justify-between gap-3">
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" v-model="autoPush" class="w-4 h-4 text-blue-600 bg-gray-700 border-gray-600 rounded focus:ring-0">
+              <span class="text-xs text-gray-400">Pull → Commit → Push</span>
+            </label>
+            <div class="flex gap-3">
             <button @click="showGitModal = false" class="px-4 py-2 text-sm text-gray-400 hover:text-white">取消</button>
-            <button 
-              @click="confirmCommit" 
+            <button
+              @click="confirmCommit"
               class="flex items-center gap-2 px-4 py-2 text-sm font-bold text-white bg-purple-600 rounded hover:bg-purple-500"
               :disabled="isCommitting"
             >
               <span v-if="isCommitting" class="animate-spin">⏳</span>
-              {{ isCommitting ? '提交中...' : '确认并提交' }}
+              {{ isCommitting ? '执行中...' : (autoPush ? '提交并推送' : '确认并提交') }}
             </button>
+            </div>
           </div>
         </div>
       </div>
@@ -202,13 +208,16 @@
 </template>
 
 <script setup>
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import TerminalView from './TerminalView.vue'
 import { callKuyepClaude } from '../utils/ai' // 引入通用的 AI 工具
 import { socket } from "../utils/socket";
 import { useAiConfig } from '../utils/useAiConfig';
 
-const { activeConfig } = useAiConfig();
+const { activeConfig, getSceneConfig } = useAiConfig();
+
+// Git 场景使用的模型配置
+const gitModelConfig = computed(() => getSceneConfig('git'));
 
 const props = defineProps({
   projects: { type: Array, default: () => [] },
@@ -233,6 +242,7 @@ const isGenerating = ref(false);
 const isCommitting = ref(false);
 const commitMessage = ref('');
 const currentGitProject = ref(null);
+const autoPush = ref(false);
 
 // 1. 点击 Git 按钮：获取 Diff -> 让 AI 写
 const handleAiCommit = (p) => {
@@ -270,7 +280,8 @@ const handleAiCommit = (p) => {
       2. 语言使用中文。
       3. 保持简练，subject 不超过 50 字。`;
 
-      const result = await callKuyepClaude(diff, systemPrompt);
+      const gitConfig = getSceneConfig('git');
+      const result = await callKuyepClaude(diff, systemPrompt, gitConfig?.id);
       commitMessage.value = result.replace(/`/g, '').trim(); // 清理一下可能的多余符号
     } catch (e) {
       commitMessage.value = `feat: update code\n\n(AI 生成失败: ${e.message})`;
@@ -285,17 +296,17 @@ const confirmCommit = () => {
   if (!commitMessage.value) return;
   isCommitting.value = true;
   
-  socket.emit('git:commit', { 
-    projectPath: currentGitProject.value.path, 
-    message: commitMessage.value 
+  socket.emit('git:commit', {
+    projectPath: currentGitProject.value.path,
+    message: commitMessage.value,
+    autoPush: autoPush.value
   }, ({ success, error }) => {
     isCommitting.value = false;
     if (success) {
       showGitModal.value = false;
-      // 可以加个 toast 提示成功
-      $toast.success('提交成功！');
+      $toast.success(autoPush.value ? '提交并推送成功！' : '提交成功！');
     } else {
-      $toast.error(`提交失败: ${error}`);
+      $toast.error(`操作失败: ${error}`);
     }
   });
 };

@@ -136,7 +136,7 @@ cd dev-manage
 # 安装依赖
 pnpm install
 
-# 开发模式（同时启动后端 :3000 + 前端 :2118）
+# 开发模式（同时启动后端 :2117 + 前端 :2118）
 npm run dev
 
 # 以 Electron 桌面应用方式启动
