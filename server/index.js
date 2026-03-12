@@ -579,6 +579,46 @@ if ($folder) { $folder.Self.Path }
       callback({ success: false, error: e.message });
     }
   });
+
+  // 在项目目录下执行单条命令（供 AI 修复功能使用）
+  socket.on('exec:run', ({ command, cwd }, callback) => {
+    if (!command || !cwd) {
+      return callback({ success: false, error: '缺少 command 或 cwd 参数' });
+    }
+    console.log(`🔧 [exec:run] 在 ${cwd} 执行: ${command}`);
+    exec(command, { cwd, shell: true, timeout: 60000, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+      callback({
+        success: !error,
+        stdout: stdout?.toString() || '',
+        stderr: stderr?.toString() || '',
+        error: error?.message || ''
+      });
+    });
+  });
+
+  // 读取文件内容（供 AI 修复读取源文件）
+  socket.on('file:read', ({ filePath }, callback) => {
+    try {
+      if (!fs.existsSync(filePath)) {
+        return callback({ success: false, error: `文件不存在: ${filePath}` });
+      }
+      const content = fs.readFileSync(filePath, 'utf-8');
+      callback({ success: true, content });
+    } catch (e) {
+      callback({ success: false, error: e.message });
+    }
+  });
+
+  // 写入文件（供 AI 修复应用代码变更）
+  socket.on('file:write', ({ filePath, content }, callback) => {
+    try {
+      fs.writeFileSync(filePath, content, 'utf-8');
+      console.log(`📝 [file:write] 已写入: ${filePath}`);
+      callback({ success: true });
+    } catch (e) {
+      callback({ success: false, error: e.message });
+    }
+  });
 });
 
 // --- ✨ 核心修复：监听主进程退出事件 ---
