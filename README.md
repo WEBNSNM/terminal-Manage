@@ -185,3 +185,5 @@ git push origin v1.0.0
 - `node_version_overrides` — 项目级 Node 版本手动覆盖
 
 ---
+
+Thanks to linux.do — 前端终端集成效能工具
