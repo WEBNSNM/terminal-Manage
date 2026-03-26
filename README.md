@@ -186,4 +186,4 @@ git push origin v1.0.0
 
 ---
 
-Thanks to [](linux.do) — 前端终端集成效能工具
+Thanks to [linux社区](linux.do) — 前端终端集成效能工具
