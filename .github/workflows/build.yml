@@ -21,6 +21,27 @@ jobs:
       - name: Check out Git repository
         uses: actions/checkout@v4
 
+      # 1.1 同步版本号：使用 tag 版本覆盖 package.json（如 v1.0.8 -> 1.0.8）
+      - name: Sync package version from tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const refName = process.env.GITHUB_REF_NAME || '';
+          const version = refName.startsWith('v') ? refName.slice(1) : refName;
+          if (!version) {
+            throw new Error('Tag name is empty, cannot sync version.');
+          }
+          const pkgPath = 'package.json';
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+          pkg.version = version;
+          fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
+          console.log(`Synced package version to: ${version}`);
+          NODE
+        env:
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+
       # 2. 安装 Node 环境 (升级到 v4)
       - name: Install Node.js
         uses: actions/setup-node@v4
