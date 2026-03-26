@@ -3,8 +3,10 @@ import { ref, onMounted, computed, watch, onUnmounted } from 'vue'
 import { socket } from "../../utils/socket";
 import ProjectList from '../../components/ProjectList.vue'
 import AiSettings from '../../components/AiSettings.vue';
+import { useAiConfig } from '../../utils/useAiConfig';
 
 const showSettings = ref(false); // 控制弹窗显示
+const { tunnelConfig } = useAiConfig();
 
 // --- 状态定义 ---
 const currentPath = ref('')
@@ -16,6 +18,13 @@ const isScanning = ref(false)
 const stats = ref({}) // 存放实时监控数据
 const installedNodeVersions = ref([]) // nvm 已安装的 Node 版本列表
 const nvmDetected = ref(false) // 是否检测到 nvm
+const tunnelState = ref({
+  gatewayPort: 26324,
+  gatewayRunning: false,
+  gatewayError: '',
+  activeTarget: null,
+  cloudflaredRunning: false
+})
 
 // --- 初始化 ---
 onMounted(() => {
@@ -42,6 +51,12 @@ onMounted(() => {
   socket.on('connect', () => console.log('✅ Socket已连接, id:', socket.id))
   socket.on('disconnect', (reason) => console.warn('❌ Socket断开:', reason))
   socket.on('reconnect', () => console.log('🔄 Socket重连成功'))
+  socket.on('tunnel:state', (state) => {
+    if (state) tunnelState.value = state
+  })
+  socket.emit('tunnel:get-state', (state) => {
+    if (state) tunnelState.value = state
+  })
 })
 
 onUnmounted(() => {
@@ -49,6 +64,7 @@ onUnmounted(() => {
   socket.off('projects-loaded')
   socket.off('status-change')
   socket.off('log')
+  socket.off('tunnel:state')
 })
 
 watch(hiddenProjectNames, (newSet) => {
@@ -266,6 +282,9 @@ const toggleHide = (p) => {
         :hidden-set="hiddenProjectNames"
         :installed-node-versions="installedNodeVersions"
         :nvm-detected="nvmDetected"
+        :tunnel-state="tunnelState"
+        :tunnel-public-domain="tunnelConfig.publicDomain || ''"
+        :tunnel-active-project-path="tunnelConfig.activeProjectPath || ''"
         @run="handleRun"
         @stop="handleStop"
         @open-folder="(path) => socket.emit('open-project-folder', path)"

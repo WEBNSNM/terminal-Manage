@@ -24,6 +24,7 @@ const emit = defineEmits(['open-file']);
 
 const terminalContainer = ref(null);
 const copySuccess = ref(false);
+const copyError = ref(false);
 
 // --- AI 诊断状态 ---
 const isAnalyzing = ref(false);
@@ -78,22 +79,89 @@ let fitAddon = null;
 let writeIndex = 0;
 let logsClearOffset = 0; // 清屏后的日志偏移量，AI 诊断只读取此偏移之后的日志
 const hasSelection = ref(false);
+const lastSelectionText = ref('');
+let copyStateTimer = null;
+
+const markCopySuccess = () => {
+  copyError.value = false;
+  copySuccess.value = true;
+  if (copyStateTimer) clearTimeout(copyStateTimer);
+  copyStateTimer = setTimeout(() => {
+    copySuccess.value = false;
+    copyError.value = false;
+    copyStateTimer = null;
+  }, 2000);
+};
+
+const markCopyError = () => {
+  copySuccess.value = false;
+  copyError.value = true;
+  if (copyStateTimer) clearTimeout(copyStateTimer);
+  copyStateTimer = setTimeout(() => {
+    copySuccess.value = false;
+    copyError.value = false;
+    copyStateTimer = null;
+  }, 2000);
+};
+
+const writeTextToClipboard = async (text) => {
+  if (!text) return false;
+
+  // 优先使用异步 Clipboard API
+  if (navigator?.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (_) {
+      // 忽略，继续降级到 execCommand
+    }
+  }
+
+  // Electron/部分浏览器环境降级方案
+  try {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.top = '-9999px';
+    textarea.style.left = '-9999px';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    textarea.setSelectionRange(0, textarea.value.length);
+    const copied = document.execCommand('copy');
+    document.body.removeChild(textarea);
+    return copied;
+  } catch (_) {
+    return false;
+  }
+};
 
 const copyLogs = async () => {
   try {
-    const selection = term?.getSelection();
-    const text = selection || props.logs.join('');
+    const currentSelection = term?.getSelection() || '';
+    const selection = hasSelection.value ? (currentSelection || lastSelectionText.value) : '';
+    const text = selection || props.logs.join('\n');
     if (!text) return;
-    await navigator.clipboard.writeText(text);
-    copySuccess.value = true;
-    setTimeout(() => copySuccess.value = false, 2000);
-  } catch (err) { console.error('复制失败', err); }
+    const copied = await writeTextToClipboard(text);
+    if (!copied) {
+      markCopyError();
+      return;
+    }
+    markCopySuccess();
+  } catch (err) {
+    console.error('复制失败', err);
+    markCopyError();
+  }
 };
 
 const clearLogs = () => {
   term?.clear();
   writeIndex = props.logs.length;
   logsClearOffset = props.logs.length;
+  lastSelectionText.value = '';
+  hasSelection.value = false;
   hasError.value = false;
   // 重置 AI 诊断状态，确保清屏后重新诊断不会使用旧数据
   aiResult.value = '';
@@ -418,7 +486,11 @@ const initTerminal = () => {
   }, { urlRegex: linkRegex }));
   term.open(terminalContainer.value);
   setTimeout(() => fitAddon.fit(), 50);
-  term.onSelectionChange(() => { hasSelection.value = !!term.getSelection(); });
+  term.onSelectionChange(() => {
+    const selection = term?.getSelection() || '';
+    hasSelection.value = !!selection;
+    lastSelectionText.value = selection;
+  });
   term.attachCustomKeyEventHandler((e) => {
     if (e.ctrlKey && e.key === 'c' && e.type === 'keydown' && term.getSelection()) { copyLogs(); return false; }
     return true;
@@ -438,7 +510,12 @@ onMounted(() => { nextTick(() => initTerminal()); });
 watch(() => props.logs, () => flushLogs(), { deep: true });
 const resizeObserver = new ResizeObserver(() => fitAddon?.fit());
 onMounted(() => { if (terminalContainer.value) resizeObserver.observe(terminalContainer.value); });
-onBeforeUnmount(() => { term?.dispose(); resizeObserver.disconnect(); document.body.style.overflow = ''; });
+onBeforeUnmount(() => {
+  term?.dispose();
+  resizeObserver.disconnect();
+  document.body.style.overflow = '';
+  if (copyStateTimer) clearTimeout(copyStateTimer);
+});
 </script>
 
 <template>
@@ -452,6 +529,7 @@ onBeforeUnmount(() => { term?.dispose(); resizeObserver.disconnect(); document.b
 
     <div class="absolute z-10 flex items-center gap-2 transition-opacity duration-200 opacity-0 top-2 right-4 group-hover:opacity-100">
       <span v-if="copySuccess" class="px-2 py-1 text-xs text-green-400 border rounded bg-black/50 fade-in border-green-500/30">✅ 已复制</span>
+      <span v-if="copyError" class="px-2 py-1 text-xs text-red-300 border rounded bg-black/50 fade-in border-red-500/30">❌ 复制失败</span>
 
       <input v-model="userQuestion" @keyup.enter="handleAnalyze" type="text" placeholder="向 AI 提问..."
         class="w-40 px-2 py-1 text-xs text-white placeholder-gray-500 transition border border-gray-600 rounded bg-gray-800/80 backdrop-blur-sm focus:border-purple-500 focus:outline-none focus:w-56" />
@@ -462,7 +540,7 @@ onBeforeUnmount(() => { term?.dispose(); resizeObserver.disconnect(); document.b
         AI 诊断
       </button>
 
-      <button @click="copyLogs" class="p-1.5 hover:text-white rounded text-xs backdrop-blur-sm border transition"
+      <button @mousedown.prevent @click="copyLogs" class="p-1.5 hover:text-white rounded text-xs backdrop-blur-sm border transition"
         :class="hasSelection ? 'bg-blue-600/80 hover:bg-blue-600 text-white border-blue-500/50' : 'bg-gray-700/80 hover:bg-blue-600 text-gray-300 border-gray-600'"
         :title="hasSelection ? '复制选中文本 (Ctrl+C)' : '复制所有日志'">
         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>

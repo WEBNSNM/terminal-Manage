@@ -48,6 +48,17 @@
             </div>
           </div>
 
+          <div class="px-2 py-2 border-t border-gray-700">
+            <div
+              @click="showTunnelView"
+              class="flex items-center gap-2 px-3 py-2.5 transition rounded cursor-pointer select-none"
+              :class="currentView === 'tunnel' ? 'bg-cyan-500/20 text-cyan-300' : 'text-gray-400 hover:bg-[#2a2a2d]'"
+            >
+              <span class="text-sm">T</span>
+              <span class="text-sm font-medium">Tunnel</span>
+            </div>
+          </div>
+
           <div class="p-3 border-t border-gray-700">
             <button
               @click="handleCreateNew"
@@ -204,6 +215,88 @@
           </template>
 
           <!-- 空状态 -->
+          <template v-else-if="currentView === 'tunnel'">
+            <div class="flex-1 p-6 overflow-y-auto">
+              <div class="pb-2 mb-5 border-b border-gray-700">
+                <h4 class="text-base font-bold text-white">Tunnel Config</h4>
+                <p class="mt-1 text-xs text-gray-500">Configure cloudflared token and tunnel runtime.</p>
+              </div>
+
+              <div class="space-y-4">
+                <div>
+                  <label class="block mb-1 text-xs text-gray-500">cloudflared Token</label>
+                  <input
+                    v-model="tunnelConfig.token"
+                    type="password"
+                    class="w-full bg-[#252526] border border-gray-600 rounded px-3 py-2 text-sm text-white font-mono focus:border-cyan-500 focus:outline-none transition"
+                    placeholder="Paste cloudflared tunnel run token"
+                  >
+                </div>
+
+                <div>
+                  <label class="block mb-1 text-xs text-gray-500">Public Domain</label>
+                  <input
+                    v-model="tunnelConfig.publicDomain"
+                    type="text"
+                    class="w-full bg-[#252526] border border-gray-600 rounded px-3 py-2 text-sm text-white font-mono focus:border-cyan-500 focus:outline-none transition"
+                    placeholder="e.g. http://kuyep.indevs.in"
+                  >
+                </div>
+
+                <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    v-model="tunnelConfig.autoSwitchOnRun"
+                    class="w-4 h-4 bg-gray-700 border-gray-600 rounded text-cyan-500 focus:ring-0"
+                  >
+                  运行项目脚本自动切换隧道映射
+                </label>
+
+                <div class="p-3 border border-gray-700 rounded bg-[#252526] text-xs text-gray-300 space-y-2">
+                  <div class="flex items-center justify-between">
+                    <span>Gateway</span>
+                    <span class="font-mono">127.0.0.1:{{ tunnelState.gatewayPort || 26324 }}</span>
+                  </div>
+                  <div class="flex items-center justify-between">
+                    <span>Gateway Status</span>
+                    <span :class="tunnelState.gatewayRunning ? 'text-green-400' : 'text-yellow-400'">
+                      {{ tunnelState.gatewayRunning ? 'RUNNING' : 'STOPPED' }}
+                    </span>
+                  </div>
+                  <div class="flex items-center justify-between">
+                    <span>Cloudflared</span>
+                    <span :class="tunnelState.cloudflaredRunning ? 'text-green-400' : 'text-gray-400'">
+                      {{ tunnelState.cloudflaredRunning ? 'RUNNING' : 'STOPPED' }}
+                    </span>
+                  </div>
+                  <div v-if="tunnelState.activeTarget?.projectName" class="pt-2 border-t border-gray-700">
+                    Active: {{ tunnelState.activeTarget.projectName }} :{{ tunnelState.activeTarget.port }}
+                  </div>
+                  <div v-if="tunnelState.gatewayError" class="text-red-400">
+                    {{ tunnelState.gatewayError }}
+                  </div>
+                </div>
+
+                <div class="flex gap-3">
+                  <button
+                    @click="handleTunnelStart"
+                    :disabled="tunnelState.cloudflaredRunning"
+                    class="px-4 py-2 text-xs font-bold text-white rounded bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50"
+                  >
+                    Start cloudflared
+                  </button>
+                  <button
+                    @click="handleTunnelStop"
+                    :disabled="!tunnelState.cloudflaredRunning"
+                    class="px-4 py-2 text-xs font-bold text-white bg-gray-600 rounded hover:bg-gray-500 disabled:opacity-50"
+                  >
+                    Stop cloudflared
+                  </button>
+                </div>
+              </div>
+            </div>
+          </template>
+
           <div v-else class="flex flex-col items-center justify-center h-full text-gray-600">
             <div class="mb-2 text-4xl grayscale opacity-30">⚙️</div>
             <p class="text-sm">请在左侧选择模型，或点击添加</p>
@@ -216,20 +309,28 @@
 </template>
 
 <script setup>
-import { ref, watch, computed, nextTick } from 'vue';
+import { ref, watch, computed, nextTick, onMounted, onUnmounted } from 'vue';
 import { useAiConfig } from '../utils/useAiConfig';
+import { socket } from '../utils/socket';
 
 const props = defineProps({ visible: Boolean });
 const emit = defineEmits(['close']);
 
 const backdrop = ref(null);
 
-const { configList, activeId, sceneConfigs, activeConfig, addConfig, updateConfig, removeConfig } = useAiConfig();
+const { configList, activeId, sceneConfigs, activeConfig, tunnelConfig, addConfig, updateConfig, removeConfig } = useAiConfig();
 
-const currentView = ref('model'); // 'model' | 'scene'
+const currentView = ref('model'); // 'model' | 'scene' | 'tunnel'
 const currentEditId = ref(null);
 const formData = ref(null);
 const isCreating = ref(false);
+const tunnelState = ref({
+  gatewayPort: 26324,
+  gatewayRunning: false,
+  gatewayError: '',
+  activeTarget: null,
+  cloudflaredRunning: false
+});
 
 // 全局默认模型名称（用于场景配置的下拉提示）
 const globalModelName = computed(() => activeConfig.value?.name || '未配置');
@@ -248,6 +349,16 @@ const showSceneView = () => {
   currentEditId.value = null;
   formData.value = null;
   isCreating.value = false;
+};
+
+const showTunnelView = () => {
+  currentView.value = 'tunnel';
+  currentEditId.value = null;
+  formData.value = null;
+  isCreating.value = false;
+  socket.emit('tunnel:get-state', (state) => {
+    if (state) tunnelState.value = state;
+  });
 };
 
 // 点击新增按钮
@@ -301,6 +412,38 @@ const handleDelete = async () => {
 };
 
 // 每次打开弹窗，默认选中当前正在使用的那个
+const handleTunnelStart = () => {
+  const token = tunnelConfig.value?.token?.trim();
+  if (!token) {
+    $toast.warning('Please enter cloudflared token first');
+    return;
+  }
+  socket.emit('tunnel:start', { token }, ({ success, error }) => {
+    if (success) $toast.success('cloudflared started');
+    else $toast.error(error || 'Failed to start cloudflared');
+  });
+};
+
+const handleTunnelStop = () => {
+  socket.emit('tunnel:stop', ({ success, error }) => {
+    if (success) $toast.success('cloudflared stop signal sent');
+    else $toast.warning(error || 'cloudflared is not running');
+  });
+};
+
+const handleTunnelState = (state) => {
+  if (state) tunnelState.value = state;
+};
+
+onMounted(() => {
+  socket.on('tunnel:state', handleTunnelState);
+  socket.emit('tunnel:get-state', handleTunnelState);
+});
+
+onUnmounted(() => {
+  socket.off('tunnel:state', handleTunnelState);
+});
+
 watch(() => props.visible, (val) => {
   if (val) {
     document.body.style.overflow = 'hidden';
@@ -314,6 +457,7 @@ watch(() => props.visible, (val) => {
     } else {
       handleCreateNew();
     }
+    socket.emit('tunnel:get-state', handleTunnelState);
   } else {
     document.body.style.overflow = '';
   }

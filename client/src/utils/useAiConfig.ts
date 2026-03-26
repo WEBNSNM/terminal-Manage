@@ -5,6 +5,7 @@ import { socket } from './socket'; // 👈 引入刚才创建的 socket 单例
 const STORAGE_KEY_LIST = 'ai_config_list';
 const STORAGE_KEY_ACTIVE = 'ai_active_id';
 const STORAGE_KEY_SCENES = 'ai_scene_configs';
+const STORAGE_KEY_TUNNEL = 'ai_tunnel_config';
 
 const DEFAULT_CONFIG: any = {
   id: 'default',
@@ -19,6 +20,13 @@ const DEFAULT_CONFIG: any = {
 const configList = ref([DEFAULT_CONFIG]);
 const activeId = ref('default');
 const sceneConfigs = ref<Record<string, string>>({ git: '', diagnosis: '' });
+const tunnelConfig = ref({
+  token: '',
+  publicDomain: '',
+  autoSwitchOnRun: false,
+  projectPorts: {},
+  activeProjectPath: ''
+});
 const isLoaded = ref(false); // 标记是否加载完成
 
 // 🔄 初始化：从后端加载数据
@@ -45,6 +53,18 @@ const init = () => {
       sceneConfigs.value = { git: '', diagnosis: '', ...data };
     }
   });
+
+  socket.emit('config:load', STORAGE_KEY_TUNNEL, (data: any) => {
+    if (data && typeof data === 'object') {
+      tunnelConfig.value = {
+        token: typeof data.token === 'string' ? data.token : '',
+        publicDomain: typeof data.publicDomain === 'string' ? data.publicDomain : '',
+        autoSwitchOnRun: data.autoSwitchOnRun !== false,
+        projectPorts: data.projectPorts && typeof data.projectPorts === 'object' ? data.projectPorts : {},
+        activeProjectPath: typeof data.activeProjectPath === 'string' ? data.activeProjectPath : ''
+      };
+    }
+  });
 };
 
 // 立即启动加载
@@ -67,6 +87,12 @@ watch(activeId, (newVal) => {
 watch(sceneConfigs, (newVal) => {
   if (isLoaded.value) {
     socket.emit('config:save', { key: STORAGE_KEY_SCENES, value: newVal });
+  }
+}, { deep: true });
+
+watch(tunnelConfig, (newVal) => {
+  if (isLoaded.value) {
+    socket.emit('config:save', { key: STORAGE_KEY_TUNNEL, value: newVal });
   }
 }, { deep: true });
 
@@ -109,6 +135,7 @@ export function useAiConfig() {
     activeId,
     activeConfig,
     sceneConfigs,
+    tunnelConfig,
     getSceneConfig,
     addConfig,
     removeConfig,

@@ -81,6 +81,24 @@
 - 🟣 紫色 — 手动指定版本
 - ⚪ 灰色 — 使用系统默认
 
+### 🌐 Tunnel 公网访问（Cloudflare）
+
+内置 Tunnel 网关，支持把当前运行中的本地项目通过 Cloudflare Tunnel 暴露到公网，方便联调、演示和真机调试。
+
+- 内置本地网关：`127.0.0.1:26324`
+- 支持配置 `cloudflared` Token 和公网域名
+- 支持一键切换内网穿透目标服务 “运行脚本时自动切换隧道目标项目”
+- 项目卡片内可直接显示并点击 `Tunnel URL`（仅在 cloudflared 运行时显示）
+
+
+---
+
+## Tunnel 使用说明
+
+详细教程请查看：
+
+- [Tunnel 使用教程](./tunnel.md)
+
 ---
 
 ## 技术架构
@@ -163,6 +181,7 @@ git push origin v1.0.0
 
 - `ai_config_list` — AI 模型配置列表
 - `ai_active_id` — 当前激活的 AI 模型
+- `ai_tunnel_config` — Tunnel 配置（Token、域名、自动切换、目标项目等）
 - `node_version_overrides` — 项目级 Node 版本手动覆盖
 
 ---

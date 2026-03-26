@@ -154,6 +154,23 @@
         </div>
 
         <TerminalView :id="p.name" :logs="logs[p.name] || []" :project-path="p.path" @open-file="(uri) => $emit('open-file', uri)" />
+        <div
+          v-if="hasRunningScripts(p) && isTunnelActiveProject(p) && isCloudflaredRunning() && getTunnelPublicUrl()"
+          class="px-4 py-2 border-b border-cyan-700/40 bg-cyan-900/15"
+        >
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-[11px] font-bold text-cyan-300">Tunnel URL</span>
+            <a
+              :href="getTunnelPublicUrl()"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="text-[11px] font-mono text-cyan-200 underline break-all hover:text-cyan-100"
+              :title="getTunnelPublicUrl()"
+            >
+              {{ getTunnelPublicUrl() }}
+            </a>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -225,7 +242,10 @@ const props = defineProps({
   logs: { type: Object, default: () => ({}) },  // 日志数据
   hiddenSet: { type: Set, default: () => new Set() },
   installedNodeVersions: { type: Array, default: () => [] },
-  nvmDetected: { type: Boolean, default: false }
+  nvmDetected: { type: Boolean, default: false },
+  tunnelState: { type: Object, default: () => ({}) },
+  tunnelPublicDomain: { type: String, default: '' },
+  tunnelActiveProjectPath: { type: String, default: '' }
 })
 
 const emit = defineEmits(['run', 'stop', 'open-folder', 'open-terminal', 'open-file', 'toggle-hide', 'node-version-change'])
@@ -367,5 +387,44 @@ const getNodeVersionTooltip = (p) => {
     return `自动检测: ${p.detectedNodeVersion.raw} (来源: ${p.detectedNodeVersion.source})`
   }
   return '使用系统默认 Node 版本'
+}
+
+const normalizePath = (value = '') =>
+  String(value || '')
+    .replace(/\\/g, '/')
+    .replace(/\/+$/, '')
+    .toLowerCase()
+
+const isTunnelActiveProject = (project) => {
+  const state = props.tunnelState || {}
+  const activeTarget = state.activeTarget || {}
+  const normalizedProjectPath = normalizePath(project.path)
+
+  const activePath = normalizePath(activeTarget.projectPath)
+  if (activePath) {
+    return normalizedProjectPath === activePath
+  }
+
+  const savedActivePath = normalizePath(props.tunnelActiveProjectPath)
+  if (savedActivePath) {
+    return normalizedProjectPath === savedActivePath
+  }
+
+  if (activeTarget.projectName) {
+    return activeTarget.projectName === project.name
+  }
+
+  return false
+}
+
+const getTunnelPublicUrl = () => {
+  const raw = String(props.tunnelPublicDomain || '').trim()
+  if (!raw) return ''
+  if (/^https?:\/\//i.test(raw)) return raw
+  return `http://${raw}`
+}
+
+const isCloudflaredRunning = () => {
+  return !!props.tunnelState?.cloudflaredRunning
 }
 </script>
