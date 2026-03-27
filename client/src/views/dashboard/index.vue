@@ -8,7 +8,7 @@ import { useAiConfig } from '../../utils/useAiConfig';
 const showSettings = ref(false); // 控制弹窗显示
 const { tunnelConfig } = useAiConfig();
 const WORKSPACE_CONFIG_KEY = 'workspace_root_path';
-const HIDDEN_PROJECTS_STORAGE_KEY = 'hidden-projects-by-workspace';
+const HIDDEN_PROJECTS_CONFIG_KEY = 'hidden_projects_by_workspace';
 const LEGACY_HIDDEN_PROJECTS_KEY = 'hidden-projects';
 
 // --- 状态定义 ---
@@ -36,40 +36,34 @@ const normalizePath = (value = '') =>
     .replace(/\/+$/, '')
     .toLowerCase()
 
-const loadHiddenProjectsStore = () => {
-  try {
-    const raw = localStorage.getItem(HIDDEN_PROJECTS_STORAGE_KEY)
-    if (!raw) return {}
-    const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
-  } catch {
-    return {}
-  }
+const normalizeHiddenProjectsStore = (input) => {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return {}
+  const result = {}
+  Object.entries(input).forEach(([workspacePath, pathList]) => {
+    const workspaceKey = normalizePath(workspacePath)
+    if (!workspaceKey || !Array.isArray(pathList)) return
+    const deduped = [...new Set(pathList.map(normalizePath).filter(Boolean))]
+    result[workspaceKey] = deduped
+  })
+  return result
 }
 
-const loadHiddenSetForWorkspace = (workspacePath) => {
-  const workspaceKey = normalizePath(workspacePath)
-  if (!workspaceKey) {
-    hiddenProjectPaths.value = new Set()
-    return
-  }
-  const savedPaths = hiddenProjectsStore.value[workspaceKey]
-  hiddenProjectPaths.value = new Set(
-    Array.isArray(savedPaths) ? savedPaths.map(normalizePath).filter(Boolean) : []
-  )
+const saveHiddenStore = () => {
+  socket.emit('config:save', {
+    key: HIDDEN_PROJECTS_CONFIG_KEY,
+    value: hiddenProjectsStore.value
+  })
 }
 
-const saveHiddenSetForWorkspace = (workspacePath) => {
-  const workspaceKey = normalizePath(workspacePath)
-  if (!workspaceKey) return
-  hiddenProjectsStore.value = {
-    ...hiddenProjectsStore.value,
-    [workspaceKey]: [...hiddenProjectPaths.value]
-  }
-  localStorage.setItem(HIDDEN_PROJECTS_STORAGE_KEY, JSON.stringify(hiddenProjectsStore.value))
+const loadHiddenStore = (callback) => {
+  socket.emit('config:load', HIDDEN_PROJECTS_CONFIG_KEY, (savedStore) => {
+    hiddenProjectsStore.value = normalizeHiddenProjectsStore(savedStore)
+    callback?.()
+  })
 }
 
-const migrateLegacyHiddenNamesForWorkspace = () => {
+const migrateLegacyHiddenNamesForWorkspace = (allowMigration = false) => {
+  if (!allowMigration) return
   const workspaceKey = normalizePath(currentPath.value)
   if (!workspaceKey) return
   if (Object.prototype.hasOwnProperty.call(hiddenProjectsStore.value, workspaceKey)) return
@@ -99,10 +93,7 @@ const migrateLegacyHiddenNamesForWorkspace = () => {
   saveHiddenSetForWorkspace(currentPath.value)
 }
 
-// --- 初始化 ---
-onMounted(() => {
-  hiddenProjectsStore.value = loadHiddenProjectsStore()
-
+const loadWorkspaceAndScan = () => {
   socket.emit('config:load', WORKSPACE_CONFIG_KEY, (savedPath) => {
     const normalizedPath = typeof savedPath === 'string' ? savedPath.trim() : ''
     if (!normalizedPath) return
@@ -111,6 +102,41 @@ onMounted(() => {
     isScanning.value = true
     socket.emit('scan-dir', normalizedPath)
   })
+}
+
+const canAccessLocalStorage = () => {
+  try {
+    return typeof window !== 'undefined' && !!window.localStorage
+  } catch {
+    return false
+  }
+}
+
+const loadHiddenSetForWorkspace = (workspacePath) => {
+  const workspaceKey = normalizePath(workspacePath)
+  if (!workspaceKey) {
+    hiddenProjectPaths.value = new Set()
+    return
+  }
+  const savedPaths = hiddenProjectsStore.value[workspaceKey]
+  hiddenProjectPaths.value = new Set(
+    Array.isArray(savedPaths) ? savedPaths.map(normalizePath).filter(Boolean) : []
+  )
+}
+
+const saveHiddenSetForWorkspace = (workspacePath) => {
+  const workspaceKey = normalizePath(workspacePath)
+  if (!workspaceKey) return
+  hiddenProjectsStore.value = {
+    ...hiddenProjectsStore.value,
+    [workspaceKey]: [...hiddenProjectPaths.value].map(normalizePath).filter(Boolean)
+  }
+  saveHiddenStore()
+}
+
+// --- 初始化 ---
+onMounted(() => {
+  loadHiddenStore(loadWorkspaceAndScan)
 
   // 加载已安装的 Node 版本列表
   socket.emit('node:get-versions', (data) => {
@@ -179,7 +205,7 @@ socket.on('projects-loaded', (data) => {
     normalizedPath: normalizePath(p.path),
     runningScripts: p.runningScripts || {}
   }))
-  migrateLegacyHiddenNamesForWorkspace()
+  migrateLegacyHiddenNamesForWorkspace(canAccessLocalStorage())
 })
 
 // 3. 状态变更
