@@ -1,8 +1,11 @@
-const { app, BrowserWindow, Menu } = require('electron');
+const { app, BrowserWindow, Menu, Tray } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const fixPath = require('fix-path');
+const appUpdater = require('./server/utils/appUpdater');
 
 const isProd = !process.argv.includes('--dev') && app.isPackaged;
+const shouldHideMenu = !process.argv.includes('--show-menu');
 
 // 修复环境变量
 fixPath();
@@ -16,10 +19,154 @@ try {
 }
 
 let mainWindow;
+let tray = null;
+let isQuitting = false;
+let hasRequestedCleanup = false;
+let appBaseUrl = '';
+let serverStartPromise = null;
+
+function getFallbackErrorPage(errorMessage) {
+  const safeMessage = String(errorMessage || 'Unknown error').replace(/</g, '&lt;');
+  return `data:text/html;charset=UTF-8,${encodeURIComponent(
+    `<html><body style="font-family: sans-serif; padding: 24px; background: #111827; color: #e5e7eb;">
+      <h2>terminalManage 启动失败</h2>
+      <p>无法连接到内置服务，请重启应用后重试。</p>
+      <pre style="white-space: pre-wrap; color: #fca5a5;">${safeMessage}</pre>
+    </body></html>`
+  )}`;
+}
+
+function ensureServerUrl() {
+  if (!server) {
+    return Promise.reject(new Error('Server module is unavailable.'));
+  }
+
+  if (appBaseUrl) {
+    return Promise.resolve(appBaseUrl);
+  }
+
+  if (server.listening) {
+    const currentPort = server.address()?.port;
+    if (currentPort) {
+      appBaseUrl = `http://localhost:${currentPort}`;
+      return Promise.resolve(appBaseUrl);
+    }
+  }
+
+  if (serverStartPromise) {
+    return serverStartPromise;
+  }
+
+  serverStartPromise = new Promise((resolve, reject) => {
+    const handleError = (err) => {
+      server.off('listening', handleListening);
+      serverStartPromise = null;
+      reject(err);
+    };
+
+    const handleListening = () => {
+      server.off('error', handleError);
+      const port = server.address()?.port;
+      if (!port) {
+        serverStartPromise = null;
+        reject(new Error('Server started but port is unavailable.'));
+        return;
+      }
+      appBaseUrl = `http://localhost:${port}`;
+      console.log(`🚀 terminalManage 已启动，自动分配端口: ${port}`);
+      resolve(appBaseUrl);
+    };
+
+    server.once('error', handleError);
+    server.once('listening', handleListening);
+
+    try {
+      server.listen(0);
+    } catch (err) {
+      server.off('error', handleError);
+      server.off('listening', handleListening);
+      serverStartPromise = null;
+      reject(err);
+    }
+  });
+
+  return serverStartPromise;
+}
+
+function resolveAppIconPath() {
+  const candidates = [
+    path.join(__dirname, 'client/dist/favicon.ico'),
+    path.join(__dirname, 'client/dist/mac.png'),
+    path.join(__dirname, 'client/src/assets/main.png')
+  ];
+  return candidates.find((item) => fs.existsSync(item)) || candidates[0];
+}
+
+function hideMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.hide();
+}
+
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow();
+    return;
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function createTray() {
+  if (tray) return;
+
+  tray = new Tray(resolveAppIconPath());
+  tray.setToolTip('terminalManage');
+
+  const trayMenu = Menu.buildFromTemplate([
+    { label: '显示窗口', click: showMainWindow },
+    { label: '隐藏窗口', click: hideMainWindow },
+    { type: 'separator' },
+    {
+      label: '退出',
+      click: requestQuitApp
+    }
+  ]);
+
+  tray.setContextMenu(trayMenu);
+  tray.on('click', () => {
+    if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible()) {
+      showMainWindow();
+      return;
+    }
+    hideMainWindow();
+  });
+}
+
+async function shutdownManagedProcesses() {
+  if (hasRequestedCleanup) return;
+  hasRequestedCleanup = true;
+  if (!server) return;
+
+  const cleanupFn = server.cleanupManagedProcesses;
+  if (typeof cleanupFn !== 'function') return;
+
+  try {
+    await Promise.resolve(cleanupFn());
+  } catch (err) {
+    console.error('⚠️ 退出前清理托管进程失败:', err);
+  }
+}
+
+async function requestQuitApp() {
+  if (isQuitting) return;
+  isQuitting = true;
+  await shutdownManagedProcesses();
+  app.quit();
+}
 
 function createWindow() {
-  // 生产环境隐藏顶部菜单栏
-  if (isProd) {
+  if (shouldHideMenu) {
     Menu.setApplicationMenu(null);
   }
 
@@ -27,12 +174,18 @@ function createWindow() {
     width: 1280,
     height: 800,
     title: "terminalManage",
-    icon: path.join(__dirname, 'client/dist/favicon.ico'),
+    icon: resolveAppIconPath(),
+    autoHideMenuBar: shouldHideMenu,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true
     }
   });
+
+  if (shouldHideMenu) {
+    mainWindow.setMenuBarVisibility(false);
+    mainWindow.removeMenu();
+  }
 
   if (isProd) {
     // 禁用 DevTools
@@ -52,27 +205,54 @@ function createWindow() {
     });
   }
 
-  // 这样跟你的前端代码 (import.meta.env.DEV ? ... : undefined) 也能配合
-  if (server) {
-      server.listen(0, () => {
-        // 获取分配到的真实端口
-        const port = server.address().port;
-        console.log(`🚀 terminalManage 已启动，自动分配端口: ${port}`);
-        
-        // 加载这个端口的页面
-        mainWindow.loadURL(`http://localhost:${port}`);
-      });
-  }
+  ensureServerUrl()
+    .then((url) => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      return mainWindow.loadURL(url);
+    })
+    .catch((err) => {
+      console.error('❌ 加载内置服务失败:', err);
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      mainWindow.loadURL(getFallbackErrorPage(err?.message || err));
+    });
+
+  mainWindow.on('close', (event) => {
+    if (isQuitting || !app.isPackaged) return;
+    event.preventDefault();
+    hideMainWindow();
+  });
 
   mainWindow.on('closed', () => { mainWindow = null; });
 }
 
-app.on('ready', createWindow);
+app.on('ready', () => {
+  createTray();
+  createWindow();
+  appUpdater.setup();
+
+  if (app.isPackaged) {
+    // 启动后延迟检查，避免和首屏加载抢资源
+    setTimeout(() => {
+      appUpdater.checkForUpdates().catch(() => {});
+    }, 12000);
+
+    // 定时轮询更新（每 3 小时）
+    setInterval(() => {
+      appUpdater.checkForUpdates().catch(() => {});
+    }, 3 * 60 * 60 * 1000);
+  }
+});
+
+app.on('before-quit', () => {
+  isQuitting = true;
+  shutdownManagedProcesses();
+});
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+  if (process.platform !== 'darwin' && isQuitting) app.quit();
 });
 
 app.on('activate', () => {
   if (mainWindow === null) createWindow();
+  else showMainWindow();
 });

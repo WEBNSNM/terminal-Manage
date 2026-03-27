@@ -7,6 +7,7 @@ import { useAiConfig } from '../../utils/useAiConfig';
 
 const showSettings = ref(false); // 控制弹窗显示
 const { tunnelConfig } = useAiConfig();
+const WORKSPACE_CONFIG_KEY = 'workspace_root_path';
 
 // --- 状态定义 ---
 const currentPath = ref('')
@@ -28,12 +29,13 @@ const tunnelState = ref({
 
 // --- 初始化 ---
 onMounted(() => {
-  const savedPath = localStorage.getItem('last-workspace')
-  if (savedPath) {
-    currentPath.value = savedPath
+  socket.emit('config:load', WORKSPACE_CONFIG_KEY, (savedPath) => {
+    const normalizedPath = typeof savedPath === 'string' ? savedPath.trim() : ''
+    if (!normalizedPath) return
+    currentPath.value = normalizedPath
     isScanning.value = true
-    socket.emit('scan-dir', savedPath)
-  }
+    socket.emit('scan-dir', normalizedPath)
+  })
 
   const savedHidden = localStorage.getItem('hidden-projects')
   if (savedHidden) {
@@ -138,17 +140,23 @@ socket.on('log', ({ name, data }) => {
 })
 
 socket.on('folder-selected', path => {
-  currentPath.value = path
-  localStorage.setItem('last-workspace', path)
+  const normalizedPath = typeof path === 'string' ? path.trim() : ''
+  currentPath.value = normalizedPath
+  if (normalizedPath) {
+    socket.emit('config:save', { key: WORKSPACE_CONFIG_KEY, value: normalizedPath })
+  }
   isScanning.value = true
 })
 
 // --- 动作方法 ---
 const manualScan = () => {
-  if (currentPath.value) {
+  const normalizedPath = typeof currentPath.value === 'string' ? currentPath.value.trim() : ''
+  if (normalizedPath) {
+    currentPath.value = normalizedPath
+    socket.emit('config:save', { key: WORKSPACE_CONFIG_KEY, value: normalizedPath })
     isScanning.value = true
     rawProjects.value = [] // 清空以显示 loading 态
-    socket.emit('scan-dir', currentPath.value)
+    socket.emit('scan-dir', normalizedPath)
   }
 }
 
@@ -262,7 +270,7 @@ const toggleHide = (p) => {
         <button 
           @click="showSettings = true"
           class="p-2 ml-2 text-gray-400 transition rounded-full hover:text-white hover:bg-gray-700"
-          title="AI 全局设置"
+          title="全局设置"
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.72v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg>
         </button>

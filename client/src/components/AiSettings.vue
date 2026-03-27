@@ -4,7 +4,7 @@
 
       <div class="flex items-center justify-between p-4 border-b border-gray-700 bg-[#252526]">
         <h3 class="flex items-center gap-2 text-lg font-bold text-white">
-          <span>🤖</span> AI 模型管理
+          <span>⚙️</span> 全局设置
         </h3>
         <button @click="$emit('close')" class="px-2 text-gray-400 hover:text-white">✕</button>
       </div>
@@ -56,6 +56,17 @@
             >
               <span class="text-sm">T</span>
               <span class="text-sm font-medium">Tunnel</span>
+            </div>
+          </div>
+
+          <div class="px-2 py-2 border-t border-gray-700">
+            <div
+              @click="showAppView"
+              class="flex items-center gap-2 px-3 py-2.5 transition rounded cursor-pointer select-none"
+              :class="currentView === 'app' ? 'bg-blue-500/20 text-blue-300' : 'text-gray-400 hover:bg-[#2a2a2d]'"
+            >
+              <span class="text-sm">U</span>
+              <span class="text-sm font-medium">应用更新</span>
             </div>
           </div>
 
@@ -297,6 +308,82 @@
             </div>
           </template>
 
+          <template v-else-if="currentView === 'app'">
+            <div class="flex-1 p-6 overflow-y-auto">
+              <div class="pb-2 mb-5 border-b border-gray-700">
+                <h4 class="text-base font-bold text-white">应用更新</h4>
+                <p class="mt-1 text-xs text-gray-500">自动下载更新包，下载完成后可重启安装。</p>
+              </div>
+
+              <div class="space-y-4">
+                <div class="p-4 border border-gray-700 rounded bg-[#252526] space-y-2 text-sm">
+                  <div class="flex items-center justify-between">
+                    <span class="text-gray-400">应用名称</span>
+                    <span class="font-medium text-white">{{ appUpdate.appName || '-' }}</span>
+                  </div>
+                  <div class="flex items-center justify-between">
+                    <span class="text-gray-400">当前版本</span>
+                    <span class="font-mono text-cyan-300">v{{ appUpdate.currentVersion || '-' }}</span>
+                  </div>
+                  <div class="flex items-center justify-between">
+                    <span class="text-gray-400">最新版本</span>
+                    <span class="font-mono text-white">
+                      {{ appUpdate.latestVersion ? `v${appUpdate.latestVersion}` : '-' }}
+                    </span>
+                  </div>
+                  <div class="flex items-center justify-between">
+                    <span class="text-gray-400">状态</span>
+                    <span
+                      :class="appUpdate.downloaded ? 'text-green-400' : appUpdate.error ? 'text-red-400' : appUpdate.hasUpdate ? 'text-orange-400' : 'text-gray-300'"
+                    >
+                      {{ appUpdate.message || '尚未检查' }}
+                    </span>
+                  </div>
+                  <div v-if="appUpdate.hasUpdate" class="pt-2 border-t border-gray-700">
+                    <div class="flex items-center justify-between text-xs text-gray-400 mb-1">
+                      <span>下载进度</span>
+                      <span>{{ Number(appUpdate.progress || 0).toFixed(0) }}%</span>
+                    </div>
+                    <div class="h-2 bg-gray-700 rounded overflow-hidden">
+                      <div
+                        class="h-full bg-blue-500 transition-all"
+                        :style="{ width: `${Math.min(100, Math.max(0, Number(appUpdate.progress || 0)))}%` }"
+                      ></div>
+                    </div>
+                  </div>
+                  <div v-if="appUpdate.lastCheckedAt" class="text-xs text-gray-500">
+                    最后检查时间：{{ appUpdate.lastCheckedAt }}
+                  </div>
+                </div>
+
+                <div class="flex gap-3">
+                  <button
+                    @click="checkAppUpdate"
+                    :disabled="appUpdate.checking || !appUpdate.enabled"
+                    class="px-4 py-2 text-xs font-bold text-white rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50"
+                  >
+                    {{ appUpdate.checking ? '检查中...' : '检查并下载更新' }}
+                  </button>
+
+                  <button
+                    @click="installUpdateNow"
+                    :disabled="!appUpdate.downloaded"
+                    class="px-4 py-2 text-xs font-bold text-white rounded bg-green-600 hover:bg-green-500 disabled:opacity-50"
+                  >
+                    立即重启并安装
+                  </button>
+                </div>
+
+                <div v-if="appUpdate.error" class="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded p-3">
+                  {{ appUpdate.error }}
+                </div>
+                <div v-else-if="!appUpdate.enabled" class="text-xs text-yellow-300 bg-yellow-500/10 border border-yellow-500/20 rounded p-3">
+                  {{ appUpdate.message || '当前环境不支持自动更新（仅打包后的桌面应用可用）' }}
+                </div>
+              </div>
+            </div>
+          </template>
+
           <div v-else class="flex flex-col items-center justify-center h-full text-gray-600">
             <div class="mb-2 text-4xl grayscale opacity-30">⚙️</div>
             <p class="text-sm">请在左侧选择模型，或点击添加</p>
@@ -320,10 +407,25 @@ const backdrop = ref(null);
 
 const { configList, activeId, sceneConfigs, activeConfig, tunnelConfig, addConfig, updateConfig, removeConfig } = useAiConfig();
 
-const currentView = ref('model'); // 'model' | 'scene' | 'tunnel'
+const currentView = ref('model'); // 'model' | 'scene' | 'tunnel' | 'app'
 const currentEditId = ref(null);
 const formData = ref(null);
 const isCreating = ref(false);
+const appUpdate = ref({
+  appName: 'terminalManage',
+  currentVersion: '',
+  supported: false,
+  enabled: false,
+  checking: false,
+  hasUpdate: false,
+  downloaded: false,
+  progress: 0,
+  status: 'idle',
+  latestVersion: '',
+  message: '',
+  error: '',
+  lastCheckedAt: ''
+});
 const tunnelState = ref({
   gatewayPort: 26324,
   gatewayRunning: false,
@@ -359,6 +461,14 @@ const showTunnelView = () => {
   socket.emit('tunnel:get-state', (state) => {
     if (state) tunnelState.value = state;
   });
+};
+
+const showAppView = () => {
+  currentView.value = 'app';
+  currentEditId.value = null;
+  formData.value = null;
+  isCreating.value = false;
+  socket.emit('app:update:get-state', applyAppUpdateState);
 };
 
 // 点击新增按钮
@@ -435,13 +545,55 @@ const handleTunnelState = (state) => {
   if (state) tunnelState.value = state;
 };
 
+const applyAppUpdateState = (payload) => {
+  if (!payload) return;
+  appUpdate.value = {
+    ...appUpdate.value,
+    ...payload
+  };
+};
+
+const checkAppUpdate = () => {
+  if (appUpdate.value.checking || !appUpdate.value.enabled) return;
+  appUpdate.value.checking = true;
+  appUpdate.value.error = '';
+  appUpdate.value.lastCheckedAt = new Date().toLocaleString();
+
+  socket.emit('app:update:check', (result) => {
+    if (!result?.success) {
+      appUpdate.value.checking = false;
+      appUpdate.value.error = result?.error || '检查更新失败';
+      $toast.warning(appUpdate.value.error);
+      return;
+    }
+    if (result?.state) applyAppUpdateState(result.state);
+  });
+};
+
+const installUpdateNow = () => {
+  if (!appUpdate.value.downloaded) {
+    $toast.warning('更新包尚未下载完成');
+    return;
+  }
+  socket.emit('app:update:quit-install', ({ success, error }) => {
+    if (!success) {
+      $toast.error(error || '安装失败');
+      return;
+    }
+    $toast.success('正在重启并安装更新...');
+  });
+};
+
 onMounted(() => {
   socket.on('tunnel:state', handleTunnelState);
+  socket.on('app:update:state', applyAppUpdateState);
   socket.emit('tunnel:get-state', handleTunnelState);
+  socket.emit('app:update:get-state', applyAppUpdateState);
 });
 
 onUnmounted(() => {
   socket.off('tunnel:state', handleTunnelState);
+  socket.off('app:update:state', applyAppUpdateState);
 });
 
 watch(() => props.visible, (val) => {
@@ -458,6 +610,7 @@ watch(() => props.visible, (val) => {
       handleCreateNew();
     }
     socket.emit('tunnel:get-state', handleTunnelState);
+    socket.emit('app:update:get-state', applyAppUpdateState);
   } else {
     document.body.style.overflow = '';
   }

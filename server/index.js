@@ -10,6 +10,7 @@ const { spawn, exec } = require('child_process');
 
 const monitor = require('./utils/monitor');
 const nodeVersions = require('./utils/nodeVersions');
+const appUpdater = require('./utils/appUpdater');
 
 // 配置文件存在用户目录下，防止误删
 const CONFIG_PATH = path.join(os.homedir(), '.terminalManage-config.json');
@@ -32,6 +33,12 @@ const io = new Server(server, {
 
 // ✅ 1. 启动监控循环
 monitor.startLoop(io);
+
+// 应用更新状态广播（仅桌面打包环境可用）
+appUpdater.setup();
+appUpdater.onState((payload) => {
+  io.emit('app:update:state', payload);
+});
 
 // 存储运行中的子进程: Map<taskKey, ChildProcess>
 const processes = new Map();
@@ -699,6 +706,29 @@ const scanProjects = (dirPath) => {
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
   socket.emit('tunnel:state', getTunnelStatePayload());
+  socket.emit('app:update:state', appUpdater.getState());
+
+  socket.on('app:get-version', (callback) => {
+    const updaterState = appUpdater.getState();
+    callback?.({
+      appName: updaterState.appName || 'terminalManage',
+      version: updaterState.currentVersion || '0.0.0'
+    });
+  });
+
+  socket.on('app:update:get-state', (callback) => {
+    callback?.(appUpdater.getState());
+  });
+
+  socket.on('app:update:check', async (callback) => {
+    const result = await appUpdater.checkForUpdates();
+    callback?.(result);
+  });
+
+  socket.on('app:update:quit-install', (callback) => {
+    const result = appUpdater.quitAndInstall();
+    callback?.(result);
+  });
 
   socket.on('tunnel:get-state', (callback) => {
     if (typeof callback === 'function') callback(getTunnelStatePayload());
@@ -1351,26 +1381,34 @@ if ($folder) { $folder.Self.Path }
 
 // --- ✨ 核心修复：监听主进程退出事件 ---
 let isCleaningUp = false;
-const cleanup = () => {
-  if (isCleaningUp) return;
+let cleanupPromise = null;
+const cleanup = ({ exitProcess = false } = {}) => {
+  if (isCleaningUp) return cleanupPromise || Promise.resolve();
   isCleaningUp = true;
 
-  if (cloudflaredProcess) {
-    killProcessTree(cloudflaredProcess, 'cloudflared');
-  }
-  stopTunnelGatewayServer();
+  cleanupPromise = new Promise((resolve) => {
+    if (cloudflaredProcess) {
+      killProcessTree(cloudflaredProcess, 'cloudflared');
+    }
+    stopTunnelGatewayServer();
 
-  for (const [key, child] of processes) {
-    killProcessTree(child, key);
-  }
+    for (const [key, child] of processes) {
+      killProcessTree(child, key);
+    }
 
-  setTimeout(() => {
-    process.exit(0);
-  }, 600);
+    setTimeout(() => {
+      if (exitProcess) {
+        process.exit(0);
+      }
+      resolve();
+    }, 600);
+  });
+
+  return cleanupPromise;
 };
 
-process.on('SIGINT', cleanup);
-process.on('SIGTERM', cleanup);
+process.on('SIGINT', () => cleanup({ exitProcess: true }));
+process.on('SIGTERM', () => cleanup({ exitProcess: true }));
 
 // 防止未捕获异常导致 server 崩溃重启（--watch 模式下崩溃会丢失所有进程追踪）
 process.on('uncaughtException', (err) => {
@@ -1395,5 +1433,7 @@ if (require.main === module) {
     restoreTunnelTargetFromConfig();
     server.listen(2117, () => console.log('Server running on 2117'));
 }
+
+server.cleanupManagedProcesses = () => cleanup({ exitProcess: false });
 
 module.exports = server;

@@ -4,13 +4,18 @@
   "description": "",
   "main": "main.js",
   "author": "kuyep",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/WEBNSNM/dev-manage.git"
+  },
   "scripts": {
     "server": "cd server && node index.js",
     "client": "cd client && npm run dev",
     "dev": "concurrently \"npm run server\" \"npm run client\" --names \"SERVER,CLIENT\" -c \"bgBlue.bold,bgGreen.bold\"",
     "start": "electron .",
-    "pack": "electron-builder --dir",
-    "dist": "electron-builder"
+    "startmenu": "electron . -- --show-menu",
+    "pack": "node scripts/build-electron.js --dir",
+    "dist": "node scripts/build-electron.js"
   },
   "build": {
     "appId": "com.terminalManage.app",
@@ -27,13 +32,23 @@
       "allowToChangeInstallationDirectory": true
     },
     "mac": {
-      "target": "dmg",
+      "target": [
+        "dmg",
+        "zip"
+      ],
       "icon": "client/dist/mac.png",
       "category": "public.app-category.developer-tools"
     },
     "dmg": {
       "title": "terminalManage Installer"
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "WEBNSNM",
+        "repo": "dev-manage"
+      }
+    ],
     "files": [
       "main.js",
       "server/**/*",
@@ -62,6 +77,7 @@
   },
   "dependencies": {
     "cors": "^2.8.6",
+    "electron-updater": "^6.8.3",
     "express": "^5.2.1",
     "fix-path": "3.0.0",
     "pidtree": "^0.6.0",
