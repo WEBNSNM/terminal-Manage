@@ -702,6 +702,36 @@ const scanProjects = (dirPath) => {
   return scanRecursively(dirPath);
 };
 
+const normalizeSelectedFolderPath = (selectedPath) =>
+  String(selectedPath || '').trim().replace(/[\\\/]+$/, '');
+
+const openFolderDialogByElectron = async () => {
+  try {
+    const electron = require('electron');
+    const dialog = electron?.dialog;
+    if (!dialog || typeof dialog.showOpenDialog !== 'function') {
+      return { supported: false, selectedPath: '' };
+    }
+
+    const parentWindow =
+      typeof electron?.BrowserWindow?.getFocusedWindow === 'function'
+        ? electron.BrowserWindow.getFocusedWindow() || undefined
+        : undefined;
+
+    const { canceled, filePaths } = await dialog.showOpenDialog(parentWindow, {
+      title: '请选择项目父目录',
+      properties: ['openDirectory', 'createDirectory']
+    });
+
+    return {
+      supported: true,
+      selectedPath: canceled ? '' : (filePaths?.[0] || '')
+    };
+  } catch (e) {
+    return { supported: false, selectedPath: '' };
+  }
+};
+
 // --- Socket 逻辑 ---
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
@@ -770,8 +800,19 @@ io.on('connection', (socket) => {
     callback?.(result);
   });
 // 1. 弹窗选择文件夹
-  socket.on('open-folder-dialog', () => {
+  socket.on('open-folder-dialog', async () => {
     console.log('正在唤起文件夹选择弹窗...');
+
+    const electronDialogResult = await openFolderDialogByElectron();
+    if (electronDialogResult.supported) {
+      const selectedPath = normalizeSelectedFolderPath(electronDialogResult.selectedPath);
+      if (selectedPath) {
+        socket.emit('folder-selected', selectedPath);
+        const projects = scanProjects(selectedPath);
+        socket.emit('projects-loaded', enrichProjects(projects));
+      }
+      return;
+    }
 
     if (process.platform === 'win32') {
       // Windows: 用 Shell.Application COM 对象替代 WinForms，无需加载 .NET 程序集
@@ -787,24 +828,22 @@ if ($folder) { $folder.Self.Path }
       const child = spawn('powershell', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encodedCommand]);
 
       child.stdout.on('data', (data) => {
-        const selectedPath = data.toString().trim();
-        if (selectedPath) {
-          socket.emit('folder-selected', selectedPath);
-          const projects = scanProjects(selectedPath);
-          socket.emit('projects-loaded', enrichProjects(projects));
-        }
+        const selectedPath = normalizeSelectedFolderPath(data.toString().trim());
+        if (!selectedPath) return;
+        socket.emit('folder-selected', selectedPath);
+        const projects = scanProjects(selectedPath);
+        socket.emit('projects-loaded', enrichProjects(projects));
       });
     } else {
       // macOS: 使用 osascript 原生弹窗
       const child = spawn('osascript', ['-e', 'POSIX path of (choose folder with prompt "请选择项目父目录")']);
 
       child.stdout.on('data', (data) => {
-        const selectedPath = data.toString().trim().replace(/\/$/, '');
-        if (selectedPath) {
-          socket.emit('folder-selected', selectedPath);
-          const projects = scanProjects(selectedPath);
-          socket.emit('projects-loaded', enrichProjects(projects));
-        }
+        const selectedPath = normalizeSelectedFolderPath(data.toString().trim());
+        if (!selectedPath) return;
+        socket.emit('folder-selected', selectedPath);
+        const projects = scanProjects(selectedPath);
+        socket.emit('projects-loaded', enrichProjects(projects));
       });
     }
   });
