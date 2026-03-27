@@ -56,23 +56,42 @@ if (String(process.env.BUILD_VERSION_DRY_RUN || '') === '1') {
   process.exit(0);
 }
 
+const run = (command, commandArgs, options = {}) =>
+  spawnSync(command, commandArgs, {
+    cwd: rootDir,
+    stdio: 'inherit',
+    env: process.env,
+    shell: false,
+    ...options
+  });
+
+// 优先直接用 Node 运行 electron-builder 的 JS CLI，避免 Windows 下 *.cmd spawn EINVAL。
+let cliPath = '';
+try {
+  cliPath = require.resolve('electron-builder/out/cli/cli.js', { paths: [rootDir] });
+} catch (e) {}
+
+if (cliPath) {
+  const jsCliResult = run(process.execPath, [cliPath, ...args]);
+  if (!jsCliResult.error) {
+    process.exit(jsCliResult.status ?? 1);
+  }
+  console.warn(`[build-electron] JS CLI failed to start: ${jsCliResult.error.message}, fallback to bin.`);
+}
+
 const builderBin = path.join(
   rootDir,
   'node_modules',
   '.bin',
   process.platform === 'win32' ? 'electron-builder.cmd' : 'electron-builder'
 );
-
-const result = spawnSync(builderBin, args, {
-  cwd: rootDir,
-  stdio: 'inherit',
-  env: process.env,
-  shell: false
+const binResult = run(builderBin, args, {
+  shell: process.platform === 'win32'
 });
 
-if (result.error) {
-  console.error('[build-electron] failed:', result.error.message);
+if (binResult.error) {
+  console.error('[build-electron] failed:', binResult.error.message);
   process.exit(1);
 }
 
-process.exit(result.status ?? 1);
+process.exit(binResult.status ?? 1);
