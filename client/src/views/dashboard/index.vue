@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, computed, watch, onUnmounted } from 'vue'
+import { ref, onMounted, computed, onUnmounted } from 'vue'
 import { socket } from "../../utils/socket";
 import ProjectList from '../../components/ProjectList.vue'
 import AiSettings from '../../components/AiSettings.vue';
@@ -8,17 +8,20 @@ import { useAiConfig } from '../../utils/useAiConfig';
 const showSettings = ref(false); // 控制弹窗显示
 const { tunnelConfig } = useAiConfig();
 const WORKSPACE_CONFIG_KEY = 'workspace_root_path';
+const HIDDEN_PROJECTS_STORAGE_KEY = 'hidden-projects-by-workspace';
+const LEGACY_HIDDEN_PROJECTS_KEY = 'hidden-projects';
 
 // --- 状态定义 ---
 const currentPath = ref('')
 const rawProjects = ref([])
 const projectLogs = ref({})
-const hiddenProjectNames = ref(new Set())
+const hiddenProjectPaths = ref(new Set())
 const showHidden = ref(false)
 const isScanning = ref(false)
 const stats = ref({}) // 存放实时监控数据
 const installedNodeVersions = ref([]) // nvm 已安装的 Node 版本列表
 const nvmDetected = ref(false) // 是否检测到 nvm
+const hiddenProjectsStore = ref({})
 const tunnelState = ref({
   gatewayPort: 26324,
   gatewayRunning: false,
@@ -27,20 +30,87 @@ const tunnelState = ref({
   cloudflaredRunning: false
 })
 
+const normalizePath = (value = '') =>
+  String(value || '')
+    .replace(/\\/g, '/')
+    .replace(/\/+$/, '')
+    .toLowerCase()
+
+const loadHiddenProjectsStore = () => {
+  try {
+    const raw = localStorage.getItem(HIDDEN_PROJECTS_STORAGE_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+const loadHiddenSetForWorkspace = (workspacePath) => {
+  const workspaceKey = normalizePath(workspacePath)
+  if (!workspaceKey) {
+    hiddenProjectPaths.value = new Set()
+    return
+  }
+  const savedPaths = hiddenProjectsStore.value[workspaceKey]
+  hiddenProjectPaths.value = new Set(
+    Array.isArray(savedPaths) ? savedPaths.map(normalizePath).filter(Boolean) : []
+  )
+}
+
+const saveHiddenSetForWorkspace = (workspacePath) => {
+  const workspaceKey = normalizePath(workspacePath)
+  if (!workspaceKey) return
+  hiddenProjectsStore.value = {
+    ...hiddenProjectsStore.value,
+    [workspaceKey]: [...hiddenProjectPaths.value]
+  }
+  localStorage.setItem(HIDDEN_PROJECTS_STORAGE_KEY, JSON.stringify(hiddenProjectsStore.value))
+}
+
+const migrateLegacyHiddenNamesForWorkspace = () => {
+  const workspaceKey = normalizePath(currentPath.value)
+  if (!workspaceKey) return
+  if (Object.prototype.hasOwnProperty.call(hiddenProjectsStore.value, workspaceKey)) return
+
+  const legacyRaw = localStorage.getItem(LEGACY_HIDDEN_PROJECTS_KEY)
+  if (!legacyRaw) return
+
+  let legacyNames = []
+  try {
+    const parsed = JSON.parse(legacyRaw)
+    if (Array.isArray(parsed)) {
+      legacyNames = parsed.map(v => String(v || '').trim()).filter(Boolean)
+    }
+  } catch {
+    return
+  }
+  if (legacyNames.length === 0) return
+
+  const legacyNameSet = new Set(legacyNames)
+  const matchedPathKeys = rawProjects.value
+    .filter(p => legacyNameSet.has(p.name))
+    .map(p => p.normalizedPath || normalizePath(p.path))
+    .filter(Boolean)
+
+  if (matchedPathKeys.length === 0) return
+  hiddenProjectPaths.value = new Set(matchedPathKeys)
+  saveHiddenSetForWorkspace(currentPath.value)
+}
+
 // --- 初始化 ---
 onMounted(() => {
+  hiddenProjectsStore.value = loadHiddenProjectsStore()
+
   socket.emit('config:load', WORKSPACE_CONFIG_KEY, (savedPath) => {
     const normalizedPath = typeof savedPath === 'string' ? savedPath.trim() : ''
     if (!normalizedPath) return
     currentPath.value = normalizedPath
+    loadHiddenSetForWorkspace(normalizedPath)
     isScanning.value = true
     socket.emit('scan-dir', normalizedPath)
   })
-
-  const savedHidden = localStorage.getItem('hidden-projects')
-  if (savedHidden) {
-    hiddenProjectNames.value = new Set(JSON.parse(savedHidden))
-  }
 
   // 加载已安装的 Node 版本列表
   socket.emit('node:get-versions', (data) => {
@@ -69,14 +139,10 @@ onUnmounted(() => {
   socket.off('tunnel:state')
 })
 
-watch(hiddenProjectNames, (newSet) => {
-  localStorage.setItem('hidden-projects', JSON.stringify([...newSet]))
-}, { deep: true })
-
 // --- 计算属性 ---
 const visibleProjects = computed(() => {
   if (showHidden.value) return rawProjects.value
-  return rawProjects.value.filter(p => !hiddenProjectNames.value.has(p.name))
+  return rawProjects.value.filter(p => !hiddenProjectPaths.value.has(p.normalizedPath || normalizePath(p.path)))
 })
 
 const projectCountLabel = computed(() => {
@@ -110,8 +176,10 @@ socket.on('projects-loaded', (data) => {
   isScanning.value = false
   rawProjects.value = data.map(p => ({
     ...p,
+    normalizedPath: normalizePath(p.path),
     runningScripts: p.runningScripts || {}
   }))
+  migrateLegacyHiddenNamesForWorkspace()
 })
 
 // 3. 状态变更
@@ -145,6 +213,7 @@ socket.on('folder-selected', path => {
   if (normalizedPath) {
     socket.emit('config:save', { key: WORKSPACE_CONFIG_KEY, value: normalizedPath })
   }
+  loadHiddenSetForWorkspace(normalizedPath)
   isScanning.value = true
 })
 
@@ -154,6 +223,7 @@ const manualScan = () => {
   if (normalizedPath) {
     currentPath.value = normalizedPath
     socket.emit('config:save', { key: WORKSPACE_CONFIG_KEY, value: normalizedPath })
+    loadHiddenSetForWorkspace(normalizedPath)
     isScanning.value = true
     rawProjects.value = [] // 清空以显示 loading 态
     socket.emit('scan-dir', normalizedPath)
@@ -223,8 +293,11 @@ const handleStop = (p) => {
 }
 
 const toggleHide = (p) => {
-  if (hiddenProjectNames.value.has(p.name)) hiddenProjectNames.value.delete(p.name)
-  else hiddenProjectNames.value.add(p.name)
+  const pathKey = p.normalizedPath || normalizePath(p.path)
+  if (!pathKey) return
+  if (hiddenProjectPaths.value.has(pathKey)) hiddenProjectPaths.value.delete(pathKey)
+  else hiddenProjectPaths.value.add(pathKey)
+  saveHiddenSetForWorkspace(currentPath.value)
 }
 </script>
 
@@ -287,7 +360,7 @@ const toggleHide = (p) => {
         :projects="visibleProjects"
         :stats="stats"
         :logs="projectLogs"
-        :hidden-set="hiddenProjectNames"
+        :hidden-set="hiddenProjectPaths"
         :installed-node-versions="installedNodeVersions"
         :nvm-detected="nvmDetected"
         :tunnel-state="tunnelState"
