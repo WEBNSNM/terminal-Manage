@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, Tray } = require('electron');
+const { app, BrowserWindow, Menu, Tray, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const fixPath = require('fix-path');
@@ -24,6 +24,30 @@ let isQuitting = false;
 let hasRequestedCleanup = false;
 let appBaseUrl = '';
 let serverStartPromise = null;
+
+function isInternalAppUrl(targetUrl) {
+  if (!targetUrl) return false;
+
+  try {
+    const parsedTarget = new URL(targetUrl);
+
+    // 允许应用自己的 data 错误页和 about:blank
+    if (parsedTarget.protocol === 'data:' || parsedTarget.href === 'about:blank') {
+      return true;
+    }
+
+    if (!appBaseUrl) return false;
+
+    const parsedBase = new URL(appBaseUrl);
+    return (
+      parsedTarget.protocol === parsedBase.protocol &&
+      parsedTarget.hostname === parsedBase.hostname &&
+      parsedTarget.port === parsedBase.port
+    );
+  } catch (e) {
+    return false;
+  }
+}
 
 function getFallbackErrorPage(errorMessage) {
   const safeMessage = String(errorMessage || 'Unknown error').replace(/</g, '&lt;');
@@ -204,6 +228,25 @@ function createWindow() {
       }
     });
   }
+
+  // 所有外链默认交给系统浏览器，不在 Electron 内嵌窗口打开
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (isInternalAppUrl(url)) {
+      return { action: 'allow' };
+    }
+    shell.openExternal(url).catch((err) => {
+      console.error('❌ 打开外部链接失败:', err);
+    });
+    return { action: 'deny' };
+  });
+
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (isInternalAppUrl(url)) return;
+    event.preventDefault();
+    shell.openExternal(url).catch((err) => {
+      console.error('❌ 打开外部链接失败:', err);
+    });
+  });
 
   ensureServerUrl()
     .then((url) => {
