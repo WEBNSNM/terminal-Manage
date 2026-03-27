@@ -60,15 +60,26 @@ jobs:
             dist_electron/*.blockmap
           if-no-files-found: warn
           retention-days: 5
-      - name: Release
+
+  release:
+    runs-on: ubuntu-latest
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download Build Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist_electron_all
+          merge-multiple: true
+
+      - name: Publish Release Assets
         uses: softprops/action-gh-release@v1
-        if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
-            dist_electron/*.exe
-            dist_electron/*.dmg
-            dist_electron/*.zip
-            dist_electron/*.yml
-            dist_electron/*.blockmap
+            dist_electron_all/*.exe
+            dist_electron_all/*.dmg
+            dist_electron_all/*.zip
+            dist_electron_all/*.yml
+            dist_electron_all/*.blockmap
           # 自动生成 Release 说明，或者你可以自己写
           generate_release_notes: true
