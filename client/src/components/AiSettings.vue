@@ -61,6 +61,17 @@
 
           <div class="px-2 py-2 border-t border-gray-700">
             <div
+              @click="showToolView"
+              class="flex items-center gap-2 px-3 py-2.5 transition rounded cursor-pointer select-none"
+              :class="currentView === 'tool' ? 'bg-emerald-500/20 text-emerald-300' : 'text-gray-400 hover:bg-[#2a2a2d]'"
+            >
+              <span class="text-sm">W</span>
+              <span class="text-sm font-medium">开发工具</span>
+            </div>
+          </div>
+
+          <div class="px-2 py-2 border-t border-gray-700">
+            <div
               @click="showAppView"
               class="flex items-center gap-2 px-3 py-2.5 transition rounded cursor-pointer select-none"
               :class="currentView === 'app' ? 'bg-blue-500/20 text-blue-300' : 'text-gray-400 hover:bg-[#2a2a2d]'"
@@ -384,6 +395,47 @@
             </div>
           </template>
 
+          <template v-else-if="currentView === 'tool'">
+            <div class="flex-1 p-6 overflow-y-auto">
+              <div class="pb-2 mb-5 border-b border-gray-700">
+                <h4 class="text-base font-bold text-white">开发工具</h4>
+                <p class="mt-1 text-xs text-gray-500">配置本地微信开发者工具路径，项目卡片中的微信打开按钮会读取当前平台对应的配置。</p>
+              </div>
+
+              <div class="space-y-5">
+                <div class="p-4 border border-gray-700 rounded-lg bg-[#252526]">
+                  <label class="block mb-2 text-sm font-medium text-white">Windows 路径</label>
+                  <input
+                    v-model="wechatDevtoolsConfig.windowsPath"
+                    type="text"
+                    placeholder="支持目录、cli.bat 或 微信开发者工具.exe"
+                    class="w-full bg-[#1e1e1e] border border-gray-600 rounded px-3 py-2 text-sm text-white font-mono focus:border-emerald-500 focus:outline-none transition"
+                  >
+                  <p class="mt-2 text-[11px] text-gray-500">
+                    推荐直接填写安装目录或 <span class="font-mono text-gray-300">cli.bat</span> 路径。
+                  </p>
+                </div>
+
+                <div class="p-4 border border-gray-700 rounded-lg bg-[#252526]">
+                  <label class="block mb-2 text-sm font-medium text-white">macOS 路径</label>
+                  <input
+                    v-model="wechatDevtoolsConfig.macosPath"
+                    type="text"
+                    placeholder="支持 .app 或 cli 路径"
+                    class="w-full bg-[#1e1e1e] border border-gray-600 rounded px-3 py-2 text-sm text-white font-mono focus:border-emerald-500 focus:outline-none transition"
+                  >
+                  <p class="mt-2 text-[11px] text-gray-500">
+                    可填写 <span class="font-mono text-gray-300">wechatwebdevtools.app</span> 或应用包内的 CLI 路径。
+                  </p>
+                </div>
+
+                <div class="text-xs text-gray-500">
+                  输入后会自动保存到本地配置文件，当前平台未配置时，小程序项目上的微信开发者工具按钮会保持禁用状态。
+                </div>
+              </div>
+            </div>
+          </template>
+
           <div v-else class="flex flex-col items-center justify-center h-full text-gray-600">
             <div class="mb-2 text-4xl grayscale opacity-30">⚙️</div>
             <p class="text-sm">请在左侧选择模型，或点击添加</p>
@@ -405,9 +457,19 @@ const emit = defineEmits(['close']);
 
 const backdrop = ref(null);
 
-const { configList, activeId, sceneConfigs, activeConfig, tunnelConfig, addConfig, updateConfig, removeConfig } = useAiConfig();
+const {
+  configList,
+  activeId,
+  sceneConfigs,
+  activeConfig,
+  tunnelConfig,
+  wechatDevtoolsConfig,
+  addConfig,
+  updateConfig,
+  removeConfig
+} = useAiConfig();
 
-const currentView = ref('model'); // 'model' | 'scene' | 'tunnel' | 'app'
+const currentView = ref('model'); // 'model' | 'scene' | 'tunnel' | 'tool' | 'app'
 const currentEditId = ref(null);
 const formData = ref(null);
 const isCreating = ref(false);
@@ -469,6 +531,13 @@ const showAppView = () => {
   formData.value = null;
   isCreating.value = false;
   socket.emit('app:update:get-state', applyAppUpdateState);
+};
+
+const showToolView = () => {
+  currentView.value = 'tool';
+  currentEditId.value = null;
+  formData.value = null;
+  isCreating.value = false;
 };
 
 // 点击新增按钮

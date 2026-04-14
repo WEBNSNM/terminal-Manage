@@ -11,6 +11,15 @@ const { spawn, exec } = require('child_process');
 const monitor = require('./utils/monitor');
 const nodeVersions = require('./utils/nodeVersions');
 const appUpdater = require('./utils/appUpdater');
+const { resolveCommandExecution } = require('./utils/commandExecution');
+const {
+  PROJECT_TAGS_BY_PATH_KEY,
+  WECHAT_DEVTOOLS_CONFIG_KEY,
+  isMiniProgramTagged,
+  normalizeProjectTagsByPath,
+  normalizeWechatDevtoolsConfig,
+  resolveWechatLaunchSpec,
+} = require('./utils/projectTools');
 
 // 配置文件存在用户目录下，防止误删
 const CONFIG_PATH = path.join(os.homedir(), '.terminalManage-config.json');
@@ -42,6 +51,7 @@ appUpdater.onState((payload) => {
 
 // 存储运行中的子进程: Map<taskKey, ChildProcess>
 const processes = new Map();
+const commandProcesses = new Map();
 const TUNNEL_CONFIG_KEY = 'ai_tunnel_config';
 const TUNNEL_GATEWAY_PORT = 26324;
 const DEFAULT_TUNNEL_HOST = '127.0.0.1';
@@ -90,6 +100,49 @@ const writeConfigFile = (data) => {
   } catch (e) {
     console.error('写入配置失败', e);
   }
+};
+
+const readWechatDevtoolsConfig = () => {
+  const allConfig = readConfigFile();
+  return normalizeWechatDevtoolsConfig(allConfig[WECHAT_DEVTOOLS_CONFIG_KEY]);
+};
+
+const readProjectTagsByPath = () => {
+  const allConfig = readConfigFile();
+  return normalizeProjectTagsByPath(allConfig[PROJECT_TAGS_BY_PATH_KEY]);
+};
+
+const resolveTargetNodeVersion = (projectPath, requestedVersion) => {
+  if (requestedVersion === 'system') return null;
+  if (requestedVersion) return requestedVersion;
+  const detected = nodeVersions.detectProjectNodeVersion(projectPath);
+  const resolved = detected ? nodeVersions.resolveNodeVersion(detected.raw) : null;
+  return resolved?.version || null;
+};
+
+const buildNodeVersionEnv = (targetNodeVersion) => {
+  if (!targetNodeVersion) return null;
+  return nodeVersions.buildEnvWithNodeVersion(targetNodeVersion);
+};
+
+const emitCommandStatus = (projectPath, projectName, running, command = '') => {
+  io.emit('command:status-change', {
+    projectPath,
+    projectName,
+    running,
+    command
+  });
+};
+
+const formatCommandLogChunk = (chunk) => {
+  const text = String(chunk || '');
+  const lines = text.split('\n');
+
+  return lines.map((line, index) => {
+    const isLast = index === lines.length - 1;
+    if (isLast && line === '') return '';
+    return `[command] ${line}${isLast ? '' : '\n'}`;
+  }).join('');
 };
 
 const normalizeTunnelConfig = (rawConfig) => {
@@ -854,6 +907,7 @@ if ($folder) { $folder.Self.Path }
     const overrides = config.node_version_overrides || {};
     const tunnelConfig = normalizeTunnelConfig(config[TUNNEL_CONFIG_KEY]);
     const manualProjectPorts = tunnelConfig.projectPorts || {};
+    const projectTagsByPath = normalizeProjectTagsByPath(config[PROJECT_TAGS_BY_PATH_KEY]);
 
     return projects.map(p => {
       // 同步运行状态
@@ -890,6 +944,8 @@ if ($folder) { $folder.Self.Path }
       const hasManualPort = isValidPort(manualPort);
       const effectiveTunnelPort = hasManualPort ? manualPort : autoPortInfo.port;
       const tunnelPortSource = hasManualPort ? 'manual' : 'auto';
+      const commandEntry = commandProcesses.get(p.path);
+      const isMiniProgram = isMiniProgramTagged(projectTagsByPath, p.path);
 
       return {
         ...p,
@@ -900,7 +956,10 @@ if ($folder) { $folder.Self.Path }
         detectedAppPort: autoPortInfo.port || null,
         detectedAppPortSource: autoPortInfo.source || '',
         effectiveTunnelPort: isValidPort(effectiveTunnelPort) ? effectiveTunnelPort : null,
-        tunnelPortSource
+        tunnelPortSource,
+        isMiniProgram,
+        commandRunning: !!commandEntry,
+        runningCommand: commandEntry?.command || ''
       };
     });
   };
@@ -978,19 +1037,11 @@ if ($folder) { $folder.Self.Path }
 
     try {
       // 确定版本：手动指定 > 自动检测 > 系统默认
-      if (nodeVersion && nodeVersion !== 'system') {
-        targetNodeVersion = nodeVersion;
-      } else if (!nodeVersion) {
-        const detected = nodeVersions.detectProjectNodeVersion(projectPath);
-        if (detected) {
-          const resolved = nodeVersions.resolveNodeVersion(detected.raw);
-          if (resolved) targetNodeVersion = resolved.version;
-        }
-      }
+      targetNodeVersion = resolveTargetNodeVersion(projectPath, nodeVersion);
 
       if (targetNodeVersion) {
         // 仅在需要切换 Node 版本时才构建自定义 env（修改 PATH）
-        customEnv = nodeVersions.buildEnvWithNodeVersion(targetNodeVersion);
+        customEnv = buildNodeVersionEnv(targetNodeVersion);
 
         const versionDir = nodeVersions.getVersionDir(targetNodeVersion);
         if (versionDir) {
@@ -1157,6 +1208,138 @@ if ($folder) { $folder.Self.Path }
     }
   });
 
+  socket.on('project:run-command', ({ projectPath, projectName, command, nodeVersion }, callback) => {
+    const trimmedCommand = String(command || '').trim();
+    if (!trimmedCommand) {
+      callback?.({ success: false, error: '命令不能为空' });
+      return;
+    }
+
+    if (!projectPath || !path.isAbsolute(projectPath)) {
+      callback?.({ success: false, error: '项目路径无效，必须是绝对路径' });
+      return;
+    }
+
+    if (commandProcesses.has(projectPath)) {
+      callback?.({ success: false, error: '该项目已有自定义命令正在运行' });
+      return;
+    }
+
+    let targetNodeVersion = null;
+    let customEnv = null;
+    let execution = {
+      command: trimmedCommand,
+      args: [],
+      shell: true
+    };
+    try {
+      targetNodeVersion = resolveTargetNodeVersion(projectPath, nodeVersion);
+      if (targetNodeVersion) {
+        customEnv = buildNodeVersionEnv(targetNodeVersion);
+      }
+      execution = resolveCommandExecution({
+        command: trimmedCommand,
+        projectPath,
+        targetNodeVersion,
+        platform: process.platform,
+        nodeVersionsApi: nodeVersions
+      });
+    } catch (e) {
+      console.error('[project:run-command] Node 版本处理失败，回退系统默认:', e.message);
+      targetNodeVersion = null;
+      customEnv = null;
+      execution = {
+        command: trimmedCommand,
+        args: [],
+        shell: true
+      };
+    }
+
+    const spawnOptions = {
+      cwd: projectPath,
+      shell: execution.shell,
+      detached: process.platform !== 'win32',
+      stdio: 'pipe'
+    };
+    if (customEnv) {
+      spawnOptions.env = customEnv;
+    }
+
+    const child = spawn(execution.command, execution.args, spawnOptions);
+    const entry = {
+      child,
+      command: trimmedCommand,
+      projectName
+    };
+
+    commandProcesses.set(projectPath, entry);
+    emitCommandStatus(projectPath, projectName, true, trimmedCommand);
+
+    io.emit('log', {
+      name: projectName,
+      data: `\n[command] $ ${trimmedCommand}${targetNodeVersion ? `  (Node v${targetNodeVersion})` : ''}\n`
+    });
+
+    const appendCommandLog = (data) => {
+      io.emit('log', {
+        name: projectName,
+        data: formatCommandLogChunk(data)
+      });
+    };
+
+    const finalizeCommand = (payload = {}) => {
+      const active = commandProcesses.get(projectPath);
+      if (active?.child === child) {
+        commandProcesses.delete(projectPath);
+        emitCommandStatus(projectPath, projectName, false, trimmedCommand);
+      }
+
+      if (payload.logMessage) {
+        io.emit('log', {
+          name: projectName,
+          data: payload.logMessage
+        });
+      }
+    };
+
+    child.stdout.on('data', appendCommandLog);
+    child.stderr.on('data', appendCommandLog);
+
+    child.on('error', (err) => {
+      finalizeCommand({
+        logMessage: `\n[command] 启动失败: ${err.message}\n`
+      });
+    });
+
+    child.on('close', (code) => {
+      finalizeCommand({
+        logMessage: `\n[command] exited with code ${code}\n`
+      });
+    });
+
+    callback?.({
+      success: true,
+      targetNodeVersion
+    });
+  });
+
+  socket.on('project:stop-command', ({ projectPath }, callback) => {
+    const entry = commandProcesses.get(projectPath);
+    if (!entry) {
+      callback?.({ success: false, error: '该项目没有正在运行的自定义命令' });
+      return;
+    }
+
+    commandProcesses.delete(projectPath);
+    emitCommandStatus(projectPath, entry.projectName, false, entry.command);
+    io.emit('log', {
+      name: entry.projectName,
+      data: '\n[command] stop signal sent\n'
+    });
+    killProcessTree(entry.child, `command:${entry.projectName}`);
+    callback?.({ success: true });
+  });
+
   // 5. 打开文件 (VS Code)
   socket.on('open-file', (filePath) => {
       // 防止命令注入的简单过滤
@@ -1200,6 +1383,58 @@ if ($folder) { $folder.Self.Path }
         console.error('打开终端失败:', err);
       }
     });
+  });
+
+  socket.on('tool:open-wechat-devtools', ({ projectPath }, callback) => {
+    if (!projectPath || !path.isAbsolute(projectPath)) {
+      callback?.({ success: false, error: '项目路径无效，必须是绝对路径' });
+      return;
+    }
+
+    const projectTagsByPath = readProjectTagsByPath();
+    if (!isMiniProgramTagged(projectTagsByPath, projectPath)) {
+      callback?.({ success: false, error: '该项目尚未标记为小程序' });
+      return;
+    }
+
+    const launchResult = resolveWechatLaunchSpec(readWechatDevtoolsConfig(), process.platform);
+    if (!launchResult.success || !launchResult.launchSpec) {
+      callback?.({ success: false, error: launchResult.error });
+      return;
+    }
+
+    if (process.platform !== 'win32' && process.platform !== 'darwin') {
+      callback?.({ success: false, error: '当前平台暂不支持打开微信开发者工具' });
+      return;
+    }
+
+    try {
+      const { command, args } = launchResult.launchSpec;
+
+      const child = spawn(command, args, {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: process.platform === 'win32'
+      });
+
+      let responded = false;
+      const finalize = (payload) => {
+        if (responded) return;
+        responded = true;
+        callback?.(payload);
+      };
+
+      child.once('error', (err) => {
+        finalize({ success: false, error: `启动微信开发者工具失败: ${err.message}` });
+      });
+
+      child.once('spawn', () => {
+        child.unref();
+        finalize({ success: true, command });
+      });
+    } catch (e) {
+      callback?.({ success: false, error: `启动微信开发者工具失败: ${e.message}` });
+    }
   });
 
   // 1. 获取 Git 变更 (用于发给 AI)
@@ -1261,7 +1496,12 @@ if ($folder) { $folder.Self.Path }
 
   socket.on('config:load', (key, callback) => {
     const allData = readConfigFile();
-    const value = allData[key] || null; // 取出对应 key 的值
+    let value = allData[key] || null; // 取出对应 key 的值
+    if (key === WECHAT_DEVTOOLS_CONFIG_KEY) {
+      value = normalizeWechatDevtoolsConfig(value);
+    } else if (key === PROJECT_TAGS_BY_PATH_KEY) {
+      value = normalizeProjectTagsByPath(value);
+    }
     console.log(`📖 读取配置 [${key}]`);
     callback(value); // ✅ 发回前端
   });
@@ -1269,7 +1509,13 @@ if ($folder) { $folder.Self.Path }
   // 💾 【监听】前端请求保存配置
   socket.on('config:save', ({ key, value }) => {
     const allData = readConfigFile();
-    allData[key] = value; // 更新对应的 key
+    let normalizedValue = value;
+    if (key === WECHAT_DEVTOOLS_CONFIG_KEY) {
+      normalizedValue = normalizeWechatDevtoolsConfig(value);
+    } else if (key === PROJECT_TAGS_BY_PATH_KEY) {
+      normalizedValue = normalizeProjectTagsByPath(value);
+    }
+    allData[key] = normalizedValue; // 更新对应的 key
     writeConfigFile(allData); // 写入硬盘
     console.log(`💾 保存配置 [${key}] Success`);
   });

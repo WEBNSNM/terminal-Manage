@@ -22,9 +22,9 @@
 
             <div class="flex flex-col overflow-hidden">
               <div class="flex items-center gap-2">
-                <span class="font-mono text-base font-bold text-gray-200 truncate" :title="p.name">
+                <div class="font-mono w-[260px] text-base font-bold text-gray-200 truncate" :title="p.name">
                   {{ p.name }}
-                </span>
+                </div>
                 <span :class="['text-[10px] px-1.5 py-0.5 rounded border font-mono uppercase', getRunnerBadgeStyle(p.runner)]">
                   {{ p.runner }}
                 </span>
@@ -38,9 +38,9 @@
               </div>
               
               <div class="flex items-center min-w-0 gap-1 text-gray-500">
-                <span class="text-[10px] truncate hover:text-gray-300 transition">
+                <div class="text-[10px] truncate hover:text-gray-300 transition w-[200px]">
                   {{ p.path.split(/[\\/]/).slice(-2).join('/') }}
-                </span>
+                </div>
                 <button
                   @click.stop="$emit('open-folder', p.path)"
                   title="在资源管理器中打开"
@@ -63,16 +63,31 @@
             </span>
           </div>
 
-          <button
-            @click="$emit('toggle-hide', p)"
-             :title="!isHidden(p.path) ? '隐藏' : '退出隐藏'"
-            class="text-gray-500 hover:text-red-400 p-1.5 rounded transition hover:bg-gray-700"
-          >
-            <svg v-if="!isHidden(p.path)"xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-4">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M3.98 8.223A10.477 10.477 0 0 0 1.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.451 10.451 0 0 1 12 4.5c4.756 0 8.773 3.162 10.065 7.498a10.522 10.522 0 0 1-4.293 5.774M6.228 6.228 3 3m3.228 3.228 3.65 3.65m7.894 7.894L21 21m-3.228-3.228-3.65-3.65m0 0a3 3 0 1 0-4.243-4.243m4.242 4.242L9.88 9.88" />
-            </svg>
-            <svg v-else xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" /></svg>
-          </button>
+          <div class="flex items-center gap-2">
+            <button
+              @click.stop="emit('toggle-mini-program', p)"
+              :title="p.isMiniProgram ? '取消小程序标签' : '标记为小程序'"
+              :class="[
+                'px-2 py-1 text-[10px] rounded border transition truncate',
+                p.isMiniProgram
+                  ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40'
+                  : 'bg-gray-700/60 text-gray-400 border-gray-600 hover:text-emerald-300 hover:border-emerald-500/40'
+              ]"
+            >
+              {{ p.isMiniProgram ? '小程序' : '+小程序' }}
+            </button>
+
+            <button
+              @click="$emit('toggle-hide', p)"
+              :title="!isHidden(p.path) ? '隐藏' : '退出隐藏'"
+              class="text-gray-500 hover:text-red-400 p-1.5 rounded transition hover:bg-gray-700"
+            >
+              <svg v-if="!isHidden(p.path)"xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-4">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3.98 8.223A10.477 10.477 0 0 0 1.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.451 10.451 0 0 1 12 4.5c4.756 0 8.773 3.162 10.065 7.498a10.522 10.522 0 0 1-4.293 5.774M6.228 6.228 3 3m3.228 3.228 3.65 3.65m7.894 7.894L21 21m-3.228-3.228-3.65-3.65m0 0a3 3 0 1 0-4.243-4.243m4.242 4.242L9.88 9.88" />
+              </svg>
+              <svg v-else xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" /></svg>
+            </button>
+          </div>
         </div>
 
         <div class="px-4 py-3 bg-[#111827] flex flex-wrap gap-2 items-center border-b border-gray-700/50 min-h-[50px]">
@@ -113,6 +128,17 @@
           </select>
 
           <button
+            v-if="p.isMiniProgram"
+            @click="emit('open-wechat-devtools', p)"
+            :disabled="!canOpenWechatDevtools(p)"
+            :title="getWechatDevtoolsTooltip(p)"
+            class="flex items-center gap-1 px-3 py-1 text-xs font-bold transition border rounded border-emerald-700/50"
+            :class="canOpenWechatDevtools(p) ? 'text-emerald-200 bg-emerald-900/30 hover:bg-emerald-600 hover:text-white' : 'text-gray-500 bg-gray-900/40 cursor-not-allowed opacity-70'"
+          >
+            <span>W</span> 微信工具
+          </button>
+
+          <button
             @click="handleAiCommit(p)"
             class="flex items-center gap-1 px-3 py-1 text-xs font-bold text-purple-300 transition border rounded bg-purple-900/30 hover:bg-purple-600 hover:text-white border-purple-800/50"
             title="AI 生成提交信息并提交"
@@ -128,6 +154,49 @@
           >
             <span>💀</span> KILL
           </button>
+        </div>
+
+        <div class="px-4 py-3 border-b border-gray-700/50 bg-[#0f172a]">
+          <div class="flex items-center justify-between gap-2 mb-2">
+            <span class="text-[11px] font-bold tracking-wide text-cyan-300 uppercase">Custom Command</span>
+            <span
+              class="text-[10px] px-2 py-0.5 rounded border font-mono"
+              :class="p.commandRunning ? 'text-amber-300 border-amber-500/40 bg-amber-500/10' : 'text-gray-500 border-gray-700 bg-gray-900/40'"
+            >
+              {{ p.commandRunning ? 'RUNNING' : 'IDLE' }}
+            </span>
+          </div>
+
+          <div class="flex gap-2">
+            <input
+              :value="getCommandInput(p.path)"
+              @input="setCommandInput(p.path, $event.target.value)"
+              @keydown.enter.prevent="handleRunCommand(p)"
+              type="text"
+              class="flex-1 px-3 py-2 text-xs text-gray-200 bg-gray-900 border border-gray-700 rounded focus:outline-none focus:border-cyan-500 font-mono"
+              placeholder="例如：npm i / pnpm add axios / node -v"
+            >
+            <button
+              @click="handleRunCommand(p)"
+              :disabled="p.commandRunning || !getCommandInput(p.path).trim()"
+              class="px-3 py-2 text-xs font-bold text-white transition rounded"
+              :class="p.commandRunning || !getCommandInput(p.path).trim() ? 'bg-gray-700 cursor-not-allowed opacity-60' : 'bg-cyan-600 hover:bg-cyan-500'"
+            >
+              执行
+            </button>
+            <button
+              @click="emit('stop-command', p)"
+              :disabled="!p.commandRunning"
+              class="px-3 py-2 text-xs font-bold text-white transition rounded"
+              :class="p.commandRunning ? 'bg-red-600 hover:bg-red-500' : 'bg-gray-700 cursor-not-allowed opacity-60'"
+            >
+              停止
+            </button>
+          </div>
+
+          <div v-if="p.commandRunning && p.runningCommand" class="mt-2 text-[11px] font-mono text-amber-300 truncate">
+            {{ p.runningCommand }}
+          </div>
         </div>
 
         <div v-if="stats[p.path]" class="px-4 py-2 border-b bg-gray-900/80 border-gray-700/50">
@@ -243,17 +312,48 @@ const props = defineProps({
   hiddenSet: { type: Set, default: () => new Set() },
   installedNodeVersions: { type: Array, default: () => [] },
   nvmDetected: { type: Boolean, default: false },
+  wechatDevtoolsConfigured: { type: Boolean, default: false },
   tunnelState: { type: Object, default: () => ({}) },
   tunnelPublicDomain: { type: String, default: '' },
   tunnelActiveProjectPath: { type: String, default: '' }
 })
 
-const emit = defineEmits(['run', 'stop', 'open-folder', 'open-terminal', 'open-file', 'toggle-hide', 'node-version-change'])
+const emit = defineEmits([
+  'run',
+  'stop',
+  'run-command',
+  'stop-command',
+  'open-folder',
+  'open-terminal',
+  'open-file',
+  'toggle-hide',
+  'toggle-mini-program',
+  'open-wechat-devtools',
+  'node-version-change'
+])
+
+const commandInputs = ref({})
 
 // 脚本按钮点击（带诊断日志）
 const handleScriptClick = (p, key) => {
   console.log('[ProjectList] 按钮点击:', p.name, key, 'disabled:', !!p.runningScripts?.[key])
   emit('run', p, key)
+}
+
+const getCommandInput = (projectPath) => {
+  return String(commandInputs.value[projectPath] || '')
+}
+
+const setCommandInput = (projectPath, value) => {
+  commandInputs.value[projectPath] = String(value || '')
+}
+
+const handleRunCommand = (project) => {
+  if (project.commandRunning) return
+  emit('run-command', {
+    project,
+    command: getCommandInput(project.path)
+  })
 }
 
 // Git 状态
@@ -387,6 +487,16 @@ const getNodeVersionTooltip = (p) => {
     return `自动检测: ${p.detectedNodeVersion.raw} (来源: ${p.detectedNodeVersion.source})`
   }
   return '使用系统默认 Node 版本'
+}
+
+const canOpenWechatDevtools = (project) => {
+  return !!(project.isMiniProgram && props.wechatDevtoolsConfigured)
+}
+
+const getWechatDevtoolsTooltip = (project) => {
+  if (!project.isMiniProgram) return '该项目尚未标记为小程序'
+  if (!props.wechatDevtoolsConfigured) return '请先在设置中配置当前平台的微信开发者工具路径'
+  return '直接启动微信开发者工具'
 }
 
 const normalizePath = (value = '') =>

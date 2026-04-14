@@ -6,6 +6,7 @@ const STORAGE_KEY_LIST = 'ai_config_list';
 const STORAGE_KEY_ACTIVE = 'ai_active_id';
 const STORAGE_KEY_SCENES = 'ai_scene_configs';
 const STORAGE_KEY_TUNNEL = 'ai_tunnel_config';
+const STORAGE_KEY_WECHAT_DEVTOOLS = 'wechat_devtools_config';
 
 const DEFAULT_CONFIG: any = {
   id: 'default',
@@ -26,6 +27,10 @@ const tunnelConfig = ref({
   autoSwitchOnRun: false,
   projectPorts: {},
   activeProjectPath: ''
+});
+const wechatDevtoolsConfig = ref({
+  windowsPath: '',
+  macosPath: ''
 });
 const isLoaded = ref(false); // 标记是否加载完成
 
@@ -65,6 +70,15 @@ const init = () => {
       };
     }
   });
+
+  socket.emit('config:load', STORAGE_KEY_WECHAT_DEVTOOLS, (data: any) => {
+    if (data && typeof data === 'object') {
+      wechatDevtoolsConfig.value = {
+        windowsPath: typeof data.windowsPath === 'string' ? data.windowsPath : '',
+        macosPath: typeof data.macosPath === 'string' ? data.macosPath : ''
+      };
+    }
+  });
 };
 
 // 立即启动加载
@@ -93,6 +107,12 @@ watch(sceneConfigs, (newVal) => {
 watch(tunnelConfig, (newVal) => {
   if (isLoaded.value) {
     socket.emit('config:save', { key: STORAGE_KEY_TUNNEL, value: newVal });
+  }
+}, { deep: true });
+
+watch(wechatDevtoolsConfig, (newVal) => {
+  if (isLoaded.value) {
+    socket.emit('config:save', { key: STORAGE_KEY_WECHAT_DEVTOOLS, value: newVal });
   }
 }, { deep: true });
 
@@ -136,6 +156,7 @@ export function useAiConfig() {
     activeConfig,
     sceneConfigs,
     tunnelConfig,
+    wechatDevtoolsConfig,
     getSceneConfig,
     addConfig,
     removeConfig,

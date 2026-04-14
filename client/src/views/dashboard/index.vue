@@ -6,10 +6,11 @@ import AiSettings from '../../components/AiSettings.vue';
 import { useAiConfig } from '../../utils/useAiConfig';
 
 const showSettings = ref(false); // 控制弹窗显示
-const { tunnelConfig } = useAiConfig();
+const { tunnelConfig, wechatDevtoolsConfig } = useAiConfig();
 const WORKSPACE_CONFIG_KEY = 'workspace_root_path';
 const HIDDEN_PROJECTS_CONFIG_KEY = 'hidden_projects_by_workspace';
 const LEGACY_HIDDEN_PROJECTS_KEY = 'hidden-projects';
+const PROJECT_TAGS_CONFIG_KEY = 'project_tags_by_path';
 
 // --- 状态定义 ---
 const currentPath = ref('')
@@ -35,6 +36,16 @@ const normalizePath = (value = '') =>
     .replace(/\\/g, '/')
     .replace(/\/+$/, '')
     .toLowerCase()
+
+const getClientPlatform = () => {
+  if (typeof navigator === 'undefined') return 'unknown'
+  const rawPlatform = String(navigator.userAgentData?.platform || navigator.platform || '').toLowerCase()
+  if (rawPlatform.includes('win')) return 'win32'
+  if (rawPlatform.includes('mac')) return 'darwin'
+  return 'unknown'
+}
+
+const currentPlatform = getClientPlatform()
 
 const normalizeHiddenProjectsStore = (input) => {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return {}
@@ -162,6 +173,7 @@ onUnmounted(() => {
   socket.off('projects-loaded')
   socket.off('status-change')
   socket.off('log')
+  socket.off('command:status-change')
   socket.off('tunnel:state')
 })
 
@@ -181,6 +193,16 @@ const runningProjectCount = computed(() => {
   return rawProjects.value.filter(p => 
     p.runningScripts && Object.values(p.runningScripts).some(Boolean)
   ).length
+})
+
+const wechatDevtoolsConfigured = computed(() => {
+  if (currentPlatform === 'win32') {
+    return !!String(wechatDevtoolsConfig.value.windowsPath || '').trim()
+  }
+  if (currentPlatform === 'darwin') {
+    return !!String(wechatDevtoolsConfig.value.macosPath || '').trim()
+  }
+  return false
 })
 
 // --- Socket 事件处理 ---
@@ -203,7 +225,10 @@ socket.on('projects-loaded', (data) => {
   rawProjects.value = data.map(p => ({
     ...p,
     normalizedPath: normalizePath(p.path),
-    runningScripts: p.runningScripts || {}
+    runningScripts: p.runningScripts || {},
+    commandRunning: !!p.commandRunning,
+    runningCommand: p.runningCommand || '',
+    isMiniProgram: p.isMiniProgram === true
   }))
   migrateLegacyHiddenNamesForWorkspace(canAccessLocalStorage())
 })
@@ -231,6 +256,13 @@ socket.on('project:stopped', ({ id }) => {
 socket.on('log', ({ name, data }) => {
   if (!projectLogs.value[name]) projectLogs.value[name] = []
   projectLogs.value[name].push(data)
+})
+
+socket.on('command:status-change', ({ projectPath, running, command }) => {
+  const project = rawProjects.value.find(x => x.path === projectPath)
+  if (!project) return
+  project.commandRunning = running
+  project.runningCommand = running ? String(command || '') : ''
 })
 
 socket.on('folder-selected', path => {
@@ -318,6 +350,65 @@ const handleStop = (p) => {
   if (stats.value[p.path]) delete stats.value[p.path]
 }
 
+const handleMiniProgramToggle = (p) => {
+  socket.emit('config:load', PROJECT_TAGS_CONFIG_KEY, (savedTags) => {
+    const nextTags = { ...(savedTags || {}) }
+    const nextValue = !p.isMiniProgram
+
+    if (nextValue) {
+      nextTags[p.path] = { ...(nextTags[p.path] || {}), isMiniProgram: true }
+    } else {
+      delete nextTags[p.path]
+    }
+
+    socket.emit('config:save', { key: PROJECT_TAGS_CONFIG_KEY, value: nextTags })
+
+    const project = rawProjects.value.find(x => x.path === p.path)
+    if (project) {
+      project.isMiniProgram = nextValue
+    }
+  })
+}
+
+const handleOpenWechatDevtools = (p) => {
+  socket.emit('tool:open-wechat-devtools', { projectPath: p.path }, ({ success, error }) => {
+    if (success) {
+      window.$toast?.success?.('已启动微信开发者工具')
+      return
+    }
+    window.$toast?.warning?.(error || '打开微信开发者工具失败')
+  })
+}
+
+const handleRunCommand = ({ project, command }) => {
+  const trimmedCommand = String(command || '').trim()
+  if (!trimmedCommand) {
+    window.$toast?.warning?.('请输入要执行的命令')
+    return
+  }
+
+  socket.emit('project:run-command', {
+    projectPath: project.path,
+    projectName: project.name,
+    command: trimmedCommand,
+    nodeVersion: project.effectiveNodeVersion || null
+  }, ({ success, error }) => {
+    if (!success) {
+      window.$toast?.warning?.(error || '执行命令失败')
+    }
+  })
+}
+
+const handleStopCommand = (p) => {
+  socket.emit('project:stop-command', {
+    projectPath: p.path
+  }, ({ success, error }) => {
+    if (!success) {
+      window.$toast?.warning?.(error || '停止命令失败')
+    }
+  })
+}
+
 const toggleHide = (p) => {
   const pathKey = p.normalizedPath || normalizePath(p.path)
   if (!pathKey) return
@@ -389,15 +480,20 @@ const toggleHide = (p) => {
         :hidden-set="hiddenProjectPaths"
         :installed-node-versions="installedNodeVersions"
         :nvm-detected="nvmDetected"
+        :wechat-devtools-configured="wechatDevtoolsConfigured"
         :tunnel-state="tunnelState"
         :tunnel-public-domain="tunnelConfig.publicDomain || ''"
         :tunnel-active-project-path="tunnelConfig.activeProjectPath || ''"
         @run="handleRun"
         @stop="handleStop"
+        @run-command="handleRunCommand"
+        @stop-command="handleStopCommand"
         @open-folder="(path) => socket.emit('open-project-folder', path)"
         @open-terminal="(path) => socket.emit('open-terminal', path)"
         @open-file="(uri) => socket.emit('open-file', uri)"
         @toggle-hide="toggleHide"
+        @toggle-mini-program="handleMiniProgramToggle"
+        @open-wechat-devtools="handleOpenWechatDevtools"
         @node-version-change="handleNodeVersionChange"
       />
       <AiSettings 
