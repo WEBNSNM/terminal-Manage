@@ -93,6 +93,20 @@ const toErrorSummary = (targetPath, error) => ({
 
 async function scanRoot(root, io) {
   const result = { fileCount: 0, sizeBytes: 0, skippedCount: 0, errors: [] };
+  try {
+    const rootStats = await io.lstat(root);
+    if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) {
+      result.skippedCount += 1;
+      return result;
+    }
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      result.skippedCount += 1;
+      result.errors.push(toErrorSummary(root, error));
+    }
+    return result;
+  }
+
   const stack = [root];
 
   while (stack.length > 0) {
@@ -193,7 +207,174 @@ async function getDriveSpace(drive = 'C:\\', io = fs.promises) {
   };
 }
 
+async function cleanRoot(root, io) {
+  const result = {
+    releasedBytes: 0,
+    deletedFiles: 0,
+    skippedCount: 0,
+    failedCount: 0,
+    errors: [],
+  };
+
+  try {
+    const rootStats = await io.lstat(root);
+    if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) {
+      result.skippedCount += 1;
+      return result;
+    }
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      result.failedCount += 1;
+      result.errors.push(toErrorSummary(root, error));
+    }
+    return result;
+  }
+
+  const stack = [{ target: root, removeDirectory: false, visited: false }];
+  while (stack.length > 0) {
+    const frame = stack.pop();
+    const { target } = frame;
+
+    if (frame.visited) {
+      try {
+        await io.rmdir(target);
+      } catch (error) {
+        if (!['ENOENT', 'ENOTEMPTY', 'EEXIST'].includes(error.code)) {
+          result.failedCount += 1;
+          result.errors.push(toErrorSummary(target, error));
+        }
+      }
+      continue;
+    }
+
+    const isRoot = path.resolve(target) === path.resolve(root);
+    if (!isRoot && !isNativePathInsideRoot(target, root)) {
+      result.skippedCount += 1;
+      continue;
+    }
+
+    let stats;
+    try {
+      stats = await io.lstat(target);
+    } catch (error) {
+      if (error.code === 'ENOENT') result.skippedCount += 1;
+      else {
+        result.failedCount += 1;
+        result.errors.push(toErrorSummary(target, error));
+      }
+      continue;
+    }
+
+    if (stats.isSymbolicLink()) {
+      result.skippedCount += 1;
+      continue;
+    }
+
+    if (stats.isFile()) {
+      try {
+        await io.unlink(target);
+        result.deletedFiles += 1;
+        result.releasedBytes += stats.size;
+      } catch (error) {
+        if (error.code === 'ENOENT') result.skippedCount += 1;
+        else {
+          result.failedCount += 1;
+          result.errors.push(toErrorSummary(target, error));
+        }
+      }
+      continue;
+    }
+
+    if (!stats.isDirectory()) {
+      result.skippedCount += 1;
+      continue;
+    }
+
+    let entries;
+    try {
+      entries = await io.readdir(target, { withFileTypes: true });
+    } catch (error) {
+      if (error.code === 'ENOENT') result.skippedCount += 1;
+      else {
+        result.failedCount += 1;
+        result.errors.push(toErrorSummary(target, error));
+      }
+      continue;
+    }
+
+    if (frame.removeDirectory) stack.push({ target, removeDirectory: true, visited: true });
+    for (const entry of entries) {
+      stack.push({
+        target: path.join(target, entry.name),
+        removeDirectory: true,
+        visited: false,
+      });
+    }
+  }
+
+  result.errors = result.errors.slice(0, 20);
+  return result;
+}
+
+async function cleanSafeCategories(categoryIds, options = {}) {
+  const platform = options.platform || options.environment?.platform || process.platform;
+  if (platform !== 'win32') throw new Error('磁盘安全清理仅支持 Windows');
+
+  const selectedIds = [...new Set(
+    Array.isArray(categoryIds)
+      ? categoryIds.map((id) => String(id || '').trim()).filter(Boolean)
+      : []
+  )];
+  if (selectedIds.length === 0) throw new Error('请至少选择一个清理类别');
+
+  const categories = options.categories || getSafeCategories(options.environment);
+  const categoriesById = new Map(categories.map((category) => [category.id, category]));
+  const unknownId = selectedIds.find((id) => !categoriesById.has(id));
+  if (unknownId) throw new Error(`未知的清理类别: ${unknownId}`);
+
+  const io = options.io || fs.promises;
+  const cleanedCategories = [];
+  const totals = {
+    releasedBytes: 0,
+    deletedFiles: 0,
+    skippedCount: 0,
+    failedCount: 0,
+  };
+
+  for (const id of selectedIds) {
+    const category = categoriesById.get(id);
+    const categoryResult = {
+      id,
+      name: category.name,
+      releasedBytes: 0,
+      deletedFiles: 0,
+      skippedCount: 0,
+      failedCount: 0,
+      errors: [],
+    };
+
+    for (const root of category.paths) {
+      const rootResult = await cleanRoot(root, io);
+      categoryResult.releasedBytes += rootResult.releasedBytes;
+      categoryResult.deletedFiles += rootResult.deletedFiles;
+      categoryResult.skippedCount += rootResult.skippedCount;
+      categoryResult.failedCount += rootResult.failedCount;
+      categoryResult.errors.push(...rootResult.errors);
+    }
+
+    categoryResult.errors = categoryResult.errors.slice(0, 20);
+    totals.releasedBytes += categoryResult.releasedBytes;
+    totals.deletedFiles += categoryResult.deletedFiles;
+    totals.skippedCount += categoryResult.skippedCount;
+    totals.failedCount += categoryResult.failedCount;
+    cleanedCategories.push(categoryResult);
+  }
+
+  return { success: true, ...totals, categories: cleanedCategories };
+}
+
 module.exports = {
+  cleanSafeCategories,
   getSafeCategories,
   getDriveSpace,
   isPathInsideRoot,
