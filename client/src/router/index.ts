@@ -18,6 +18,11 @@ const routes = [
     name: 'WeeklyReport',
     component: WeeklyReport
   },
+  {
+    path: '/disk-cleaner',
+    name: 'DiskCleaner',
+    component: () => import('../views/disk-cleaner/index.vue')
+  },
 ]
 
 const router = createRouter({
