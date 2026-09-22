@@ -160,6 +160,10 @@ const getDiskCleanerEnvironment = () => {
   return {
     platform: process.platform,
     localAppData: process.env.LOCALAPPDATA || '',
+    appData: process.env.APPDATA || '',
+    programFiles: process.env.ProgramW6432 || process.env.ProgramFiles || '',
+    programFilesX86: process.env['ProgramFiles(x86)'] || '',
+    programData: process.env.ProgramData || '',
     tempDir: os.tmpdir(),
     userData,
   };

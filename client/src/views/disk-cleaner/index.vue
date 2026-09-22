@@ -18,6 +18,7 @@ interface CleanerError {
 
 interface ScanCategory {
   id: string;
+  mode: 'cleanable' | 'report-only';
   name: string;
   description: string;
   paths: string[];
@@ -25,6 +26,8 @@ interface ScanCategory {
   sizeBytes: number;
   skippedCount: number;
   errors: CleanerError[];
+  safeToClean: boolean;
+  cleanupAdvice: string;
 }
 
 interface ScanResponse {
@@ -70,6 +73,8 @@ const request = <T,>(event: string, payload: unknown, timeoutMs = 120_000) =>
   });
 
 const categories = computed(() => scanResult.value?.categories || []);
+const cleanableCategories = computed(() => categories.value.filter((category) => category.mode !== 'report-only' && category.safeToClean));
+const reportOnlyCategories = computed(() => categories.value.filter((category) => category.mode === 'report-only' || !category.safeToClean));
 const selectedCount = computed(() => selectedIds.value.size);
 const selectedBytes = computed(() => categories.value.reduce(
   (total, category) => selectedIds.value.has(category.id) ? total + category.sizeBytes : total,
@@ -112,7 +117,9 @@ const scan = async ({ preserveCleanResult = false } = {}) => {
     if (!response?.success) throw new Error(response?.error || '扫描失败');
     scanResult.value = response;
     selectedIds.value = new Set(
-      (response.categories || []).filter((category) => category.sizeBytes > 0).map((category) => category.id)
+      (response.categories || [])
+        .filter((category) => category.mode !== 'report-only' && category.safeToClean && category.sizeBytes > 0)
+        .map((category) => category.id)
     );
   } catch (error) {
     if (!mounted || generation !== requestGeneration) return;
@@ -220,7 +227,7 @@ onUnmounted(() => {
 
       <section class="flex gap-3 px-4 py-3 border rounded bg-emerald-950/30 border-emerald-900/70">
         <svg aria-hidden="true" viewBox="0 0 24 24" class="flex-none w-5 h-5 mt-0.5 text-emerald-400" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></svg>
-        <p class="text-sm leading-6 text-gray-300">仅处理当前用户的临时文件和开发工具缓存，不扫描个人文件、项目源码或 Windows 系统目录。</p>
+        <p class="text-sm leading-6 text-gray-300">清理仅限当前用户的明确缓存目录，不扫描个人文件或项目源码；软件安装目录只读统计，后端禁止删除。</p>
       </section>
 
       <section v-if="cleanResult" class="grid grid-cols-2 gap-px overflow-hidden border border-gray-800 rounded bg-gray-800 sm:grid-cols-4">
@@ -248,19 +255,20 @@ onUnmounted(() => {
         <div class="text-center"><div class="w-9 h-9 mx-auto border-2 rounded-full border-emerald-500/30 border-t-emerald-400 animate-spin"></div><p class="mt-4 text-sm text-gray-400">正在统计安全缓存...</p></div>
       </section>
 
-      <section v-if="categories.length" class="space-y-3">
+      <section v-if="cleanableCategories.length" class="space-y-3">
         <div class="flex items-end justify-between gap-4">
           <div><h2 class="text-sm font-semibold text-white">可清理项目</h2><p class="mt-1 text-xs text-gray-500">扫描耗时 {{ scanResult?.durationMs || 0 }} ms</p></div>
           <p class="text-xs text-gray-500">共 {{ scanResult?.totals?.fileCount || 0 }} 个文件</p>
         </div>
 
         <article
-          v-for="category in categories"
+          v-for="category in cleanableCategories"
           :key="category.id"
           class="grid gap-4 p-4 transition border rounded-lg sm:grid-cols-[auto_1fr_auto]"
           :class="selectedIds.has(category.id) ? 'border-emerald-800 bg-gray-900' : 'border-gray-800 bg-gray-900/60'"
         >
           <input
+            v-if="category.mode !== 'report-only' && category.safeToClean"
             type="checkbox"
             class="w-5 h-5 mt-1 text-emerald-600 bg-gray-800 border-gray-600 rounded focus:ring-emerald-600 disabled:opacity-40"
             :checked="selectedIds.has(category.id)"
@@ -268,9 +276,12 @@ onUnmounted(() => {
             :aria-label="`选择${category.name}`"
             @change="toggleCategory(category.id)"
           />
+          <div v-else class="flex items-center justify-center w-5 h-5 mt-1 text-gray-500 border border-gray-700 rounded" title="只读分析，不提供删除">i</div>
           <div class="min-w-0">
             <h3 class="text-sm font-semibold text-white">{{ category.name }}</h3>
             <p class="mt-1 text-sm text-gray-400">{{ category.description }}</p>
+            <p class="mt-2 text-xs" :class="category.safeToClean ? 'text-emerald-300' : 'text-amber-300'">可安全清理：{{ category.safeToClean ? '是' : '否' }}</p>
+            <p class="mt-1 text-xs text-gray-500">建议：{{ category.cleanupAdvice }}</p>
             <div class="mt-3 space-y-1">
               <p v-for="cachePath in category.paths" :key="cachePath" class="font-mono text-xs text-gray-500 break-all">{{ cachePath }}</p>
             </div>
@@ -283,13 +294,37 @@ onUnmounted(() => {
         </article>
       </section>
 
-      <section v-else-if="scanResult && !isScanning" class="py-12 text-center border-y border-gray-800">
+      <section v-if="reportOnlyCategories.length" class="space-y-3">
+        <div>
+          <h2 class="text-sm font-semibold text-white">只读占用分析</h2>
+          <p class="mt-1 text-xs text-gray-500">这些目录可能包含账号、配置或用户数据，仅统计大小，不提供删除。</p>
+        </div>
+        <article
+          v-for="category in reportOnlyCategories"
+          :key="category.id"
+          class="grid gap-4 p-4 border border-amber-900/60 rounded-lg bg-amber-950/10 sm:grid-cols-[1fr_auto]"
+        >
+          <div class="min-w-0">
+            <h3 class="text-sm font-semibold text-white">{{ category.name }}</h3>
+            <p class="mt-1 text-sm text-gray-400">{{ category.description }}</p>
+            <p class="mt-2 text-xs text-amber-300">只读分析，不会加入清理</p>
+            <p class="mt-1 text-xs text-gray-500">建议：{{ category.cleanupAdvice }}</p>
+            <p v-for="cachePath in category.paths" :key="cachePath" class="mt-2 font-mono text-xs text-gray-500 break-all">{{ cachePath }}</p>
+          </div>
+          <div class="sm:text-right">
+            <p class="text-lg font-semibold text-amber-200">{{ formatBytes(category.sizeBytes) }}</p>
+            <p class="mt-1 text-xs text-gray-500">{{ category.fileCount }} 个文件</p>
+          </div>
+        </article>
+      </section>
+
+      <section v-if="scanResult && !isScanning && categories.length === 0" class="py-12 text-center border-y border-gray-800">
         <p class="font-medium text-gray-200">未发现可清理缓存</p>
         <p class="mt-1 text-sm text-gray-500">当前安全目录没有可统计的缓存文件。</p>
       </section>
     </main>
 
-    <footer v-if="scanResult && categories.length" class="fixed bottom-0 left-0 right-0 z-20 border-t border-gray-800 bg-gray-950/95 backdrop-blur">
+    <footer v-if="scanResult && cleanableCategories.length" class="fixed bottom-0 left-0 right-0 z-20 border-t border-gray-800 bg-gray-950/95 backdrop-blur">
       <div class="flex items-center justify-between max-w-6xl gap-4 px-4 py-3 mx-auto sm:px-6">
         <div class="min-w-0"><p class="text-sm font-medium text-white">已选 {{ selectedCount }} 类</p><p class="text-xs text-gray-500">预计释放 {{ formatBytes(selectedBytes) }}</p></div>
         <button
