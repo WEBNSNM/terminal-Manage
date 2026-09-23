@@ -12,6 +12,7 @@ const monitor = require('./utils/monitor');
 const nodeVersions = require('./utils/nodeVersions');
 const appUpdater = require('./utils/appUpdater');
 const diskCleaner = require('./utils/diskCleaner');
+const { openWindowsDiskCleanup } = require('./utils/windowsDiskCleanup');
 const { createTunnelInitializer } = require('./utils/tunnelInitializer');
 const { resolveCommandExecution } = require('./utils/commandExecution');
 const { createWeeklyReportRuntime } = require('./services/weeklyReport/runtime');
@@ -1673,6 +1674,15 @@ if ($folder) { $folder.Self.Path }
       callback({ success: true, ...scan, ...driveResult });
     } catch (error) {
       callback({ success: false, error: error.message || '扫描失败' });
+    }
+  });
+
+  socket.on('disk-cleaner:open-windows-cleanup', async (_payload = {}, callback = () => {}) => {
+    try {
+      const result = await openWindowsDiskCleanup({ platform: process.platform });
+      callback(result);
+    } catch (error) {
+      callback({ success: false, error: error.message || '无法打开 Windows 磁盘清理' });
     }
   });
 

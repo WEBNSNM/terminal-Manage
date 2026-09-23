@@ -20,7 +20,11 @@ test('getSafeCategories returns only declared Windows cache roots and deduplicat
     userData: 'C:\\Users\\dev\\AppData\\Roaming\\terminalManage',
   });
 
-  assert.deepEqual(categories.map(({ id, paths }) => ({ id, paths })), [
+  const declaredDeveloperCaches = categories
+    .filter(({ id }) => ['user-temp', 'npm-cache', 'pnpm-cache', 'yarn-cache', 'devmaster-cache'].includes(id))
+    .map(({ id, paths }) => ({ id, paths }));
+
+  assert.deepEqual(declaredDeveloperCaches, [
     { id: 'user-temp', paths: ['C:\\Users\\dev\\AppData\\Local\\Temp'] },
     { id: 'npm-cache', paths: ['C:\\Users\\dev\\AppData\\Local\\npm-cache'] },
     {

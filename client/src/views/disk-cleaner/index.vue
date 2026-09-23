@@ -57,6 +57,7 @@ interface CleanResponse {
 const router = useRouter();
 const isScanning = ref(false);
 const isCleaning = ref(false);
+const isOpeningSystemCleanup = ref(false);
 const scanResult = ref<ScanResponse | null>(null);
 const cleanResult = ref<CleanResponse | null>(null);
 const selectedIds = ref(new Set<string>());
@@ -167,6 +168,23 @@ const clean = async () => {
   }
 };
 
+const openSystemCleanup = async () => {
+  if (isBusy.value || isOpeningSystemCleanup.value) return;
+  isOpeningSystemCleanup.value = true;
+  pageError.value = '';
+  try {
+    const response = await request<{ success: boolean; error?: string }>('disk-cleaner:open-windows-cleanup', {}, 15_000);
+    if (!response?.success) throw new Error(response?.error || '无法打开 Windows 磁盘清理');
+    window.$toast?.success('已打开 Windows 磁盘清理，请在系统窗口中自行选择并确认', 5000);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '无法打开 Windows 磁盘清理';
+    pageError.value = message;
+    window.$toast?.error(message, 5000);
+  } finally {
+    isOpeningSystemCleanup.value = false;
+  }
+};
+
 onUnmounted(() => {
   mounted = false;
   requestGeneration += 1;
@@ -192,15 +210,26 @@ onUnmounted(() => {
             <p class="text-xs text-gray-500">仅清理可重新生成的用户缓存</p>
           </div>
         </div>
-        <button
-          type="button"
-          class="flex items-center justify-center min-w-[104px] gap-2 px-4 py-2 text-sm font-medium text-white transition rounded bg-emerald-700 hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-50"
-          :disabled="isBusy"
-          @click="scan()"
-        >
-          <svg aria-hidden="true" viewBox="0 0 24 24" class="w-4 h-4" :class="{ 'animate-spin': isScanning }" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v6h-6"/></svg>
-          {{ isScanning ? '扫描中' : '开始扫描' }}
-        </button>
+        <div class="flex items-center gap-2">
+          <button
+            type="button"
+            class="hidden px-3 py-2 text-xs font-medium text-gray-200 transition border border-gray-700 rounded sm:inline-flex hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
+            :disabled="isBusy || isOpeningSystemCleanup"
+            title="打开 Windows 官方磁盘清理窗口；不会自动删除"
+            @click="openSystemCleanup"
+          >
+            {{ isOpeningSystemCleanup ? '正在打开...' : 'Windows 系统清理' }}
+          </button>
+          <button
+            type="button"
+            class="flex items-center justify-center min-w-[104px] gap-2 px-4 py-2 text-sm font-medium text-white transition rounded bg-emerald-700 hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-50"
+            :disabled="isBusy || isOpeningSystemCleanup"
+            @click="scan()"
+          >
+            <svg aria-hidden="true" viewBox="0 0 24 24" class="w-4 h-4" :class="{ 'animate-spin': isScanning }" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v6h-6"/></svg>
+            {{ isScanning ? '扫描中' : '开始扫描' }}
+          </button>
+        </div>
       </div>
     </header>
 
