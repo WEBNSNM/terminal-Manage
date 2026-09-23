@@ -57,6 +57,30 @@
 
 脚本启动后，terminalManage 每 2 秒采集一次进程资源数据，**聚合父子进程**（如 npm → node → vite）的 CPU 和内存占用，以可视化进度条实时展示在项目卡片中。
 
+### 🧹 Windows C 盘安全清理
+
+在 Dashboard 中进入“磁盘清理”页面，可以分析 C 盘容量和当前 Windows 用户的缓存占用。扫描默认为只读操作，不会在扫描过程中删除文件。
+
+可清理范围采用服务端固定白名单，包括：
+
+- 当前用户临时目录（`%TEMP%`、`%LOCALAPPDATA%\Temp`）
+- npm、pnpm、Yarn 包管理器缓存
+- Edge、Chrome 各用户 Profile 的 `Cache`、`Code Cache`、`GPUCache`
+- VS Code、Cursor、Discord、Teams 等软件的明确缓存目录
+- Tencent、QQ、微信目录下名称严格匹配的缓存、临时、日志和崩溃目录
+
+为保证数据安全，清理功能具有以下限制：
+
+- 不扫描或删除桌面、文档、下载、图片、项目源码等个人文件
+- 不删除浏览器书签、密码、Cookie、历史记录和登录数据
+- 不删除聊天记录、接收文件、消息数据库或软件配置
+- `Program Files`、`Program Files (x86)`、`ProgramData` 及可能混合用户数据的软件目录仅统计占用，不提供删除
+- 清理接口只接受固定类别 ID，不接受客户端传入的任意文件路径
+- 清理前必须勾选项目并再次确认；占用中或无权限的文件会自动跳过，不会强制结束进程
+- 不修改 Windows 系统文件或注册表
+
+页面还提供“Windows 系统清理”入口，固定启动 `cleanmgr.exe /d C:`。该入口只打开 Windows 官方磁盘清理窗口，不会自动勾选或执行删除。回收站不属于 terminalManage 的直接清理范围，如需清空，应在 Windows 官方窗口中由用户自行选择并确认。
+
 ### 📟 内嵌终端日志
 
 基于 xterm.js 的终端视图，实时展示脚本输出。支持：
