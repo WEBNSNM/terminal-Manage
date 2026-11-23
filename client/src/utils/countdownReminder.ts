@@ -85,3 +85,12 @@ export const getNextReminderAt = (
   next.setSeconds(0, 0);
   return next;
 };
+
+export const formatReminderCountdown = (next: Date, now: number) => {
+  const seconds = Math.max(0, Math.ceil((next.getTime() - now) / 1000));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor(seconds / 60) % 60;
+  return [hours, minutes, seconds % 60]
+    .map((value) => String(value).padStart(2, '0'))
+    .join(':');
+};

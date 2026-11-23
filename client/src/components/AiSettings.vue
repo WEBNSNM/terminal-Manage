@@ -364,6 +364,16 @@
                   启用系统倒计时提醒
                 </label>
 
+                <div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-y border-gray-700 py-3">
+                  <span class="text-sm text-gray-300">距离下次提醒</span>
+                  <span v-if="reminderCountdown !== null" class="font-mono text-2xl tabular-nums text-amber-300">
+                    {{ reminderCountdown }}
+                  </span>
+                  <span v-else class="text-sm text-gray-400">
+                    {{ countdownReminderConfig.enabled ? '开始时间需早于结束时间' : '提醒未启用' }}
+                  </span>
+                </div>
+
                 <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
                   <div>
                     <label class="block mb-1 text-xs text-gray-500">开始时间</label>
@@ -552,6 +562,8 @@
 <script setup>
 import { ref, watch, computed, nextTick, onMounted, onUnmounted } from 'vue';
 import { useAiConfig } from '../utils/useAiConfig';
+import { formatReminderCountdown } from '../utils/countdownReminder';
+import { nextReminderAt } from '../utils/useCountdownReminder';
 import { socket } from '../utils/socket';
 
 const props = defineProps({ visible: Boolean });
@@ -573,6 +585,23 @@ const {
 } = useAiConfig();
 
 const currentView = ref('model'); // 'model' | 'scene' | 'tunnel' | 'tool' | 'app'
+const countdownNow = ref(Date.now());
+const reminderCountdown = computed(() => {
+  const next = nextReminderAt.value;
+  return next ? formatReminderCountdown(next, countdownNow.value) : null;
+});
+
+watch(
+  () => props.visible && currentView.value === 'reminder' && nextReminderAt.value,
+  (next, _, onCleanup) => {
+    if (!next) return;
+    const updateTime = () => { countdownNow.value = Date.now(); };
+    updateTime();
+    const timer = setInterval(updateTime, 1000);
+    onCleanup(() => clearInterval(timer));
+  }
+);
+
 const currentEditId = ref(null);
 const formData = ref(null);
 const isCreating = ref(false);

@@ -1,4 +1,4 @@
-import { onUnmounted, ref, watch } from 'vue';
+import { onUnmounted, readonly, ref, watch } from 'vue';
 import { socket } from './socket';
 import { useAiConfig } from './useAiConfig';
 import {
@@ -13,7 +13,8 @@ type NotificationResult = {
 };
 
 const MAX_TIMEOUT_MS = 2_147_483_647;
-const nextReminderAt = ref<Date | null>(null);
+const scheduledReminderAt = ref<Date | null>(null);
+export const nextReminderAt = readonly(scheduledReminderAt);
 let reminderTimer: ReturnType<typeof setTimeout> | null = null;
 let started = false;
 
@@ -43,7 +44,7 @@ const scheduleNextReminder = (rawConfig: CountdownReminderConfig) => {
   clearReminderTimer();
   const config = normalizeCountdownReminderConfig(rawConfig);
   const next = getNextReminderAt(new Date(), config);
-  nextReminderAt.value = next;
+  scheduledReminderAt.value = next;
 
   if (!next) return;
 
@@ -73,7 +74,7 @@ export function useCountdownReminder() {
 
   onUnmounted(() => {
     clearReminderTimer();
-    nextReminderAt.value = null;
+    scheduledReminderAt.value = null;
     started = false;
   });
 

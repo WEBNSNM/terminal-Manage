@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   DEFAULT_COUNTDOWN_REMINDER_CONFIG,
+  formatReminderCountdown,
   getNextReminderAt,
   normalizeCountdownReminderConfig,
 } from './countdownReminder.ts';
@@ -71,4 +72,13 @@ test('does not schedule when disabled', () => {
   );
 
   assert.equal(next, null);
+});
+
+test('formats the remaining time until the scheduled reminder', () => {
+  const now = at('2026-07-15T08:30:00');
+  const next = at('2026-07-16T09:00:00');
+
+  assert.equal(formatReminderCountdown(next, now.getTime()), '24:30:00');
+  assert.equal(formatReminderCountdown(next, next.getTime() - 200), '00:00:01');
+  assert.equal(formatReminderCountdown(next, next.getTime() + 200), '00:00:00');
 });
